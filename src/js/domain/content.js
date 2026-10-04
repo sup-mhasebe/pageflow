@@ -26,8 +26,8 @@ export function addContent(state, rawName, rawRequiredPages) {
   return { ok: true, content };
 }
 
-// コンテンツ編集。配置済みでP数を増やす場合は後続ページが空いているときのみ拡張する。
-// 配置済みでP数を減らす場合は、解放するページの扱いが仕様未定義のため拒否する。
+// コンテンツ編集。配置済みでP数を増やす場合は後続ページが空いているときのみ拡張する（空きがなければ拒否）。
+// 減らす場合は末尾側のページのみ解除する（他のコンテンツは動かさない・再配置しない）。
 export function updateContent(state, contentId, rawName, rawRequiredPages) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, errors: { name: 'コンテンツが見つかりません。' } };
@@ -38,21 +38,24 @@ export function updateContent(state, contentId, rawName, rawRequiredPages) {
   const { name, requiredPages } = v.data;
   let pages = state.pages;
   if (isPlaced(pages, contentId) && requiredPages !== content.requiredPages) {
-    if (requiredPages < content.requiredPages) {
-      return {
-        ok: false,
-        errors: { requiredPages: '配置済みのコンテンツはページ数を減らせません。先に配置を解除してください。' },
-      };
-    }
     const start = startPageOf(pages, contentId);
-    const check = checkRange(state, content, start, requiredPages);
-    if (!check.ok) return { ok: false, errors: { requiredPages: `ページ数を増やせません。${check.reason}` } };
     const end = start + requiredPages - 1;
-    pages = pages.map((p) =>
-      p.physicalPageNumber >= start && p.physicalPageNumber <= end
-        ? { ...p, contentId, contentPageIndex: p.physicalPageNumber - start }
-        : p,
-    );
+    if (requiredPages < content.requiredPages) {
+      // 減少：開始ページと先頭側の配置は維持し、不要になった末尾側のページだけ解除する
+      pages = pages.map((p) =>
+        p.contentId === contentId && p.physicalPageNumber > end
+          ? { ...p, contentId: null, contentPageIndex: null }
+          : p,
+      );
+    } else {
+      const check = checkRange(state, content, start, requiredPages);
+      if (!check.ok) return { ok: false, errors: { requiredPages: `ページ数を増やせません。${check.reason}` } };
+      pages = pages.map((p) =>
+        p.physicalPageNumber >= start && p.physicalPageNumber <= end
+          ? { ...p, contentId, contentPageIndex: p.physicalPageNumber - start }
+          : p,
+      );
+    }
   }
   return { ok: true, content: { ...content, name, requiredPages }, pages };
 }

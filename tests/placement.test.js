@@ -133,11 +133,45 @@ test('P数増加：後続が空いていれば拡張、使用中なら拒否', (
   assert.ok(ng.errors.requiredPages);
 });
 
-test('P数減少：配置済みなら拒否、未配置なら可能', () => {
+test('P数減少（未配置）：必要ページ数だけ変わる', () => {
   const { state, ids } = setup();
-  assert.equal(updateContent(state, ids[0], '特集', '1').ok, true);
-  const s1 = apply(state, placeContent(state, ids[0], 4));
-  assert.equal(updateContent(s1, ids[0], '特集', '1').ok, false);
+  const r = updateContent(state, ids[0], '特集', '1');
+  assert.equal(r.ok, true);
+  assert.equal(r.content.requiredPages, 1);
+});
+
+test('P数減少（配置済み）：3P→2Pで開始ページと先頭側を維持し、末尾P6のみ空きになる', () => {
+  const { state, ids } = setup([['特集', 3], ['コラム', 1]]);
+  let s = apply(state, placeContent(state, ids[0], 4)); // P4-P6
+  s = apply(s, placeContent(s, ids[1], 7)); // 直後のP7に別コンテンツ
+  const r = updateContent(s, ids[0], '特集', '2');
+  assert.equal(r.ok, true);
+  assert.equal(r.content.requiredPages, 2);
+  const after = { ...s, pages: r.pages };
+  assert.deepEqual(occupied(after, ids[0]), [[4, 0], [5, 1]]);
+  assert.equal(after.pages[5].contentId, null); // P6は空き
+  assert.equal(after.pages[5].contentPageIndex, null);
+  assert.deepEqual(occupied(after, ids[1]), [[7, 0]]); // 他コンテンツは動かない
+});
+
+test('P数減少（配置済み）：3P→1Pでも開始ページは変わらず、他のページに触れない', () => {
+  const { state, ids } = setup([['特集', 3]]);
+  const s = apply(state, placeContent(state, ids[0], 5)); // P5-P7
+  const r = updateContent(s, ids[0], '特集', '1');
+  assert.equal(r.ok, true);
+  assert.deepEqual(occupied({ ...s, pages: r.pages }, ids[0]), [[5, 0]]);
+  // 固定ページを含む他のページは変更されない
+  const changed = r.pages.filter((p, i) => JSON.stringify(p) !== JSON.stringify(s.pages[i]));
+  assert.deepEqual(changed.map((p) => p.physicalPageNumber), [6, 7]);
+});
+
+test('D&D：2Pコンテンツの②側をドラッグしてP6へドロップしても、P6=①・P7=②になる', () => {
+  const { state, ids } = setup();
+  const s1 = apply(state, placeContent(state, ids[0], 4)); // P4-P5
+  // UIはどの占有ページをつかんでも contentId と「ドロップ先ページ」だけを渡す
+  const r = placeContent(s1, ids[0], 6);
+  assert.equal(r.ok, true);
+  assert.deepEqual(occupied(apply(s1, r), ids[0]), [[6, 0], [7, 1]]);
 });
 
 test('zod：コンテンツ名は必須、必要ページ数は1以上の整数（0.5Pは不可）', () => {

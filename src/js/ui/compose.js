@@ -115,7 +115,7 @@ function renderDetail({ booklet, contents, pages }, selectedNo) {
     }
     rows.push(['PDF', p.pdfAssetId ? '登録済み' : 'PDF未登録']);
     const dl = rows
-      .map(([k, v]) => `<div class="flex justify-between gap-2"><dt class="text-slate-500">${k}</dt><dd class="text-right">${v}</dd></div>`)
+      .map(([k, v]) => `<div class="flex justify-between gap-2"><dt class="shrink-0 whitespace-nowrap text-slate-500">${k}</dt><dd class="min-w-0 text-right">${v}</dd></div>`)
       .join('');
     const actions =
       c && !c.isFixed

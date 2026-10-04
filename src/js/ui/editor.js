@@ -2,6 +2,7 @@ import { esc, btnSecondary } from './util.js';
 import { usage } from '../domain/booklet.js';
 import { capacity } from '../domain/content.js';
 import { renderCompose, renderComingSoon } from './compose.js';
+import { renderImposition } from './imposition-view.js';
 
 const TABS = [
   { key: 'compose', label: '構成' },
@@ -36,7 +37,7 @@ export function renderEditor(state) {
   let body;
   if (state.tab === 'compose') body = renderCompose(state);
   else if (state.tab === 'preview') body = renderComingSoon('冊子プレビュー');
-  else body = renderComingSoon('面付シミュレーション');
+  else body = renderImposition(state);
 
   return `
     <div class="mx-auto max-w-7xl px-4 py-4">
