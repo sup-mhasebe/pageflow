@@ -102,3 +102,23 @@ export const pageRecordSchema = z.object({
   pdfAssetId: nullableId,
   renderImageId: nullableId,
 });
+
+// PdfAsset／RenderImage のメタ情報（Blob本体は別管理のため検証対象外）
+export const pdfAssetMetaSchema = z.object({
+  id: z.string(),
+  bookletId: z.string(),
+  contentId: z.string(),
+  originalFileName: z.string(),
+  pageCount: z.number().int().min(1), // A3分割後（A4換算）のページ数
+  importedAt: z.string(),
+  status: z.literal('ready'),
+});
+
+export const renderImageMetaSchema = z.object({
+  id: z.string(),
+  pdfAssetId: z.string(),
+  sourcePdfPage: z.number().int().min(1),
+  splitSide: z.enum(['none', 'left', 'right']),
+  width: z.number().int().min(1),
+  height: z.number().int().min(1),
+});

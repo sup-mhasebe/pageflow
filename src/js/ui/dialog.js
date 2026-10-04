@@ -1,4 +1,5 @@
 import { esc, btnSecondary, btnPrimary, inputCls } from './util.js';
+import { modeRadios, renderPdfImportModal } from './pdf-import-modal.js';
 
 // 冊子削除の確認ダイアログ（登録PDFも削除され元に戻せない旨を明示する）
 export function renderModal(state) {
@@ -24,16 +25,35 @@ export function renderModal(state) {
     const msg = m.placed
       ? 'このコンテンツは冊子に配置されています。削除すると配置も解除されます。削除しますか？'
       : 'このコンテンツを削除しますか？';
+    const pdfNote = m.hasPdf
+      ? '<p class="mb-4 text-sm text-slate-700">登録済みのPDFは、完全には削除されず「ゴミ箱」へ移動します。</p>'
+      : '';
     return `
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
         <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
           <h2 id="dlg-title" class="mb-2 text-lg font-semibold">コンテンツを削除</h2>
           <p class="mb-1 break-words text-sm font-medium">「${esc(m.name)}」</p>
-          <p class="mb-4 text-sm text-slate-700">${msg}</p>
+          <p class="mb-3 text-sm text-slate-700">${msg}</p>${pdfNote}
           <div class="flex justify-end gap-3">
             <button type="button" class="${btnSecondary}" data-action="cancel-modal">キャンセル</button>
             <button type="button" class="inline-flex items-center rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
               data-action="confirm-delete-content" data-id="${esc(m.id)}">削除する</button>
+          </div>
+        </div>
+      </div>`;
+  }
+  if (m.type === 'pdf-import') return renderPdfImportModal(m);
+  if (m.type === 'unregister-pdf') {
+    return `
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+        <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+          <h2 id="dlg-title" class="mb-2 text-lg font-semibold">PDF登録を解除</h2>
+          <p class="mb-1 break-words text-sm font-medium">「${esc(m.contentName)}」／${esc(m.fileName)}</p>
+          <p class="mb-3 text-sm text-slate-700">コンテンツと冊子ページへの配置は残り、PDFとの関連だけが解除されます。元PDFの扱いを選んでください。</p>
+          ${modeRadios(m.mode, 'unregister')}
+          <div class="mt-4 flex justify-end gap-3">
+            <button type="button" class="${btnSecondary}" data-action="cancel-modal">キャンセル</button>
+            <button type="button" class="${btnPrimary}" data-action="confirm-unregister-pdf" ${m.mode ? '' : 'disabled'}>解除する</button>
           </div>
         </div>
       </div>`;

@@ -1,9 +1,13 @@
 import { validateContentInput } from '../schemas.js';
 import { checkRange, isPlaced, startPageOf, unplaceContent } from './placement.js';
+import { assetOfContent, hasPdfRef, relinkPages, PDF_IN_USE_MESSAGE } from './pdf.js';
 
 // ユーザーコンテンツのID。IndexedDB はキー順で返すため、作成順に並ぶよう時刻プレフィックスを付ける
+// 同一ミリ秒に複数作成しても順序が逆転しないよう、前回値より必ず大きくする
+let lastStamp = 0;
 export function newContentId(now = Date.now()) {
-  return `c_${now.toString(36).padStart(9, '0')}_${crypto.randomUUID()}`;
+  lastStamp = Math.max(now, lastStamp + 1);
+  return `c_${lastStamp.toString(36).padStart(9, '0')}_${crypto.randomUUID()}`;
 }
 
 // 表示順：固定コンテンツ（表紙→裏表紙）の後にユーザーコンテンツを作成順で並べる
@@ -41,10 +45,15 @@ export function updateContent(state, contentId, rawName, rawRequiredPages) {
     const start = startPageOf(pages, contentId);
     const end = start + requiredPages - 1;
     if (requiredPages < content.requiredPages) {
+      // 解放されるページにPDF／生成画像がある場合は拒否する（PDFを暗黙的に削除・解除しない）
+      const freed = pages.filter((p) => p.contentId === contentId && p.physicalPageNumber > end);
+      if (freed.some(hasPdfRef)) {
+        return { ok: false, errors: { requiredPages: PDF_IN_USE_MESSAGE.replace('ページ数を変更できません', 'ページ数を減らせません') } };
+      }
       // 減少：開始ページと先頭側の配置は維持し、不要になった末尾側のページだけ解除する
       pages = pages.map((p) =>
         p.contentId === contentId && p.physicalPageNumber > end
-          ? { ...p, contentId: null, contentPageIndex: null }
+          ? { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null }
           : p,
       );
     } else {
@@ -55,12 +64,14 @@ export function updateContent(state, contentId, rawName, rawRequiredPages) {
           ? { ...p, contentId, contentPageIndex: p.physicalPageNumber - start }
           : p,
       );
+      pages = relinkPages({ ...state, pages });
     }
   }
   return { ok: true, content: { ...content, name, requiredPages }, pages };
 }
 
-// コンテンツ削除。配置済みなら配置も解除する（呼び出し側で必ずユーザー確認を取ること）
+// コンテンツ削除。配置済みなら配置も解除する（呼び出し側で必ずユーザー確認を取ること）。
+// 登録済みPDFがある場合は、完全削除せずゴミ箱へ移動する（trashAssetIds で DB 層に指示）。
 export function deleteContent(state, contentId) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, reason: 'コンテンツが見つかりません。' };
@@ -71,7 +82,17 @@ export function deleteContent(state, contentId) {
     if (!r.ok) return r;
     pages = r.pages;
   }
-  return { ok: true, pages, contents: state.contents.filter((c) => c.id !== contentId) };
+  const asset = assetOfContent(state, contentId);
+  const removedImageIds = asset ? (state.renderImages ?? []).filter((i) => i.pdfAssetId === asset.id).map((i) => i.id) : [];
+  return {
+    ok: true,
+    pages,
+    contents: state.contents.filter((c) => c.id !== contentId),
+    pdfAssets: (state.pdfAssets ?? []).filter((a) => a.id !== asset?.id),
+    renderImages: (state.renderImages ?? []).filter((i) => i.pdfAssetId !== asset?.id),
+    removedImageIds,
+    trashAssetIds: asset ? [asset.id] : [],
+  };
 }
 
 // 容量チェック：登録コンテンツの合計ページ数が、固定ページ以外のページ数を超えていないか

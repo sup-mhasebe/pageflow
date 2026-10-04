@@ -1,4 +1,5 @@
 import { totalPagesSchema } from '../schemas.js';
+import { hasPdfRef, PDF_IN_USE_MESSAGE } from './pdf.js';
 
 export const TEMPLATE_ID = 'standard-booklet';
 
@@ -91,7 +92,18 @@ export function resizeBooklet(state, newTotalPages, now = new Date()) {
   const newFixedPos = new Set(newLayout.map((f) => f.position));
   const newPosByName = new Map(newLayout.map((f) => [f.name, f.position]));
 
-  // 変更を拒否すべきページ（削除される末尾ページ、または新たに固定ページになる位置）
+  // PDF／生成画像が登録されたページが、削除・移動（固定ページの再配置を含む）の対象になる場合は拒否する。
+  // PDFを自動削除・自動移動・自動ゴミ箱移動しない。
+  const pdfAffected = pages.filter((p) => {
+    if (!hasPdfRef(p)) return false;
+    const c = p.contentId && contentById.get(p.contentId);
+    if (p.physicalPageNumber > newTotalPages) return true; // 削除されるページ
+    if (c?.isFixed) return newPosByName.get(c.name) !== p.physicalPageNumber; // 位置が変わる固定ページ
+    return newFixedPos.has(p.physicalPageNumber); // 新たに固定ページ位置になるページ
+  });
+  if (pdfAffected.length > 0) return { ok: false, reason: PDF_IN_USE_MESSAGE };
+
+  // ユーザー配置データのあるページが、削除される末尾ページ／新たに固定ページになる位置にある場合は拒否する
   const blockedUser = pages.filter((p) => {
     const c = p.contentId && contentById.get(p.contentId);
     if (!c || c.isFixed) return false;
@@ -105,18 +117,6 @@ export function resizeBooklet(state, newTotalPages, now = new Date()) {
     return {
       ok: false,
       reason: `${nums} にコンテンツ${names}が配置されているため、総ページ数を変更できません。先に配置を解除してください。`,
-    };
-  }
-  // 位置が変わる固定ページにPDFが登録済みの場合も自動移動しない（Phase 4 以降で扱いを確認）
-  const blockedFixed = pages.filter((p) => {
-    const c = p.contentId && contentById.get(p.contentId);
-    if (!c || !c.isFixed || !p.pdfAssetId) return false;
-    return newPosByName.get(c.name) !== p.physicalPageNumber;
-  });
-  if (blockedFixed.length > 0) {
-    return {
-      ok: false,
-      reason: '位置が変わる固定ページにPDFが登録されているため、総ページ数を変更できません。',
     };
   }
 

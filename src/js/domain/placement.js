@@ -1,5 +1,7 @@
 // コンテンツ配置の純粋関数。入力を書き換えず、新しい配列を返す。
 // 原則：連続空きが確保できない場合は拒否し、既存の配置を勝手に動かさない・上書きしない。
+// PDFはコンテンツ単位で登録されており、冊子ページとの対応は配置位置から導出し直す（relinkPages）。
+import { relinkPages } from './pdf.js';
 
 const pageMap = (pages) => new Map(pages.map((p) => [p.physicalPageNumber, p]));
 
@@ -57,7 +59,7 @@ export function placeContent(state, contentId, startNo) {
 
   const end = startNo + content.requiredPages - 1;
   const pages = state.pages.map((p) => {
-    if (p.contentId === contentId) return { ...p, contentId: null, contentPageIndex: null };
+    if (p.contentId === contentId) return { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null };
     return p;
   });
   const next = pages.map((p) =>
@@ -65,7 +67,8 @@ export function placeContent(state, contentId, startNo) {
       ? { ...p, contentId, contentPageIndex: p.physicalPageNumber - startNo }
       : p,
   );
-  return { ok: true, pages: next, moved: currentStart !== null };
+  // 登録済みPDFはコンテンツに付随して移動する（新しい配置位置へ対応付け直す）
+  return { ok: true, pages: relinkPages({ ...state, pages: next }), moved: currentStart !== null };
 }
 
 // 配置解除：コンテンツが占有する全ページを解除する（コンテンツ自体は残す）
@@ -74,8 +77,11 @@ export function unplaceContent(state, contentId) {
   if (!content) return { ok: false, reason: 'コンテンツが見つかりません。' };
   if (content.isFixed) return { ok: false, reason: '固定ページは配置解除できません。' };
   if (!isPlaced(state.pages, contentId)) return { ok: false, reason: 'このコンテンツは配置されていません。' };
+  // 配置解除：冊子ページとの対応のみ外す。登録済みPDF（PdfAsset）はコンテンツに残る
   const pages = state.pages.map((p) =>
-    p.contentId === contentId ? { ...p, contentId: null, contentPageIndex: null } : p,
+    p.contentId === contentId
+      ? { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null }
+      : p,
   );
   return { ok: true, pages };
 }

@@ -116,7 +116,10 @@ root.addEventListener('click', async (e) => {
       case 'ask-delete-content': {
         const { contents, pages } = store.getState().current;
         const c = contents.find((x) => x.id === id);
-        if (c) store.setModal({ type: 'delete-content', id: c.id, name: c.name, placed: isPlaced(pages, c.id) });
+        if (c) {
+          const hasPdf = store.getState().current.pdfAssets.some((a) => a.contentId === c.id);
+          store.setModal({ type: 'delete-content', id: c.id, name: c.name, placed: isPlaced(pages, c.id), hasPdf });
+        }
         break;
       }
       case 'confirm-delete-content': {
@@ -126,6 +129,22 @@ root.addEventListener('click', async (e) => {
         else store.showToast('コンテンツを削除しました。', 'success');
         break;
       }
+      case 'ask-unregister-pdf':
+        store.askUnregisterPdf(id);
+        break;
+      case 'confirm-unregister-pdf':
+        await store.confirmUnregisterPdf();
+        break;
+      case 'set-pdf-mode': {
+        // 差し替え／登録解除時の「旧PDF・元PDFの扱い」の選択
+        const m = store.getState().modal;
+        if (m?.type === 'pdf-import') store.patchModal({ replaceMode: el.dataset.mode });
+        else if (m?.type === 'unregister-pdf') store.patchModal({ mode: el.dataset.mode });
+        break;
+      }
+      case 'confirm-pdf-import':
+        await store.confirmPdfImport();
+        break;
       case 'unplace-content': {
         const r = await store.unplaceContentAction(id);
         if (!r.ok) store.showToast(r.reason, 'error');
@@ -194,6 +213,22 @@ root.addEventListener('submit', async (e) => {
   } catch (err) {
     console.error(err);
     store.showToast('操作に失敗しました。', 'error');
+  }
+});
+
+// ---- PDFファイル選択：解析モーダルを開く（PDFはブラウザ内で処理し、外部へ送信しない）----
+root.addEventListener('change', async (e) => {
+  const input = e.target.closest('input[data-pdf-input]');
+  if (!input) return;
+  const file = input.files?.[0];
+  const contentId = input.dataset.contentId;
+  input.value = ''; // 同じファイルを再選択できるようにする
+  if (!file) return;
+  try {
+    await store.startPdfImport(contentId, file);
+  } catch (err) {
+    console.error(err);
+    store.showToast('PDFの読み込みに失敗しました。', 'error');
   }
 });
 

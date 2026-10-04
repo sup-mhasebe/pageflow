@@ -1,5 +1,6 @@
 import { esc, circled } from './util.js';
 import { computeImposition } from '../domain/imposition.js';
+import { getImageUrl } from '../images.js';
 
 // 冊子ページ（物理ページ番号）の表示情報：コンテンツ名とPDF状態
 function pageInfo({ contents, pages }, no) {
@@ -10,18 +11,28 @@ function pageInfo({ contents, pages }, no) {
     const idx = !c.isFixed && c.requiredPages > 1 ? ` ${circled(p.contentPageIndex + 1)}` : '';
     name = `${c.name}${idx}`;
   }
-  return { name, isEmpty: !c, isFixed: !!c?.isFixed, hasPdf: !!p?.pdfAssetId };
+  return { name, isEmpty: !c, isFixed: !!c?.isFixed, imageUrl: getImageUrl(p?.renderImageId) };
 }
 
-// A3の片側（左ページ／右ページ）。PDF画像はPhase 4以降のため、ページ情報のプレースホルダー表示
+// A3の片側（左ページ／右ページ）
 function half(label, no, info) {
+  // 生成画像があれば画像を表示（構成画面と同じ画像）。無ければページ情報のプレースホルダー
+  if (info.imageUrl) {
+    return `
+      <div class="relative min-w-0 bg-white">
+        <img src="${info.imageUrl}" alt="P${no} ${esc(info.name)}" class="h-full w-full object-contain" />
+        <div class="absolute inset-x-0 bottom-0 bg-black/60 px-2 py-1 text-center text-xs text-white">
+          ${label}｜P${no} ${esc(info.name)}
+        </div>
+      </div>`;
+  }
   const bg = info.isEmpty ? 'bg-white border border-dashed border-slate-300' : info.isFixed ? 'bg-slate-100' : 'bg-indigo-50';
   return `
     <div class="flex min-w-0 flex-col items-center justify-center gap-1 p-2 text-center ${bg}">
       <span class="text-[11px] text-slate-500">${label}</span>
       <span class="text-xl font-bold sm:text-2xl">P${no}</span>
       <span class="max-w-full break-words text-xs text-slate-700 sm:text-sm">${esc(info.name)}</span>
-      <span class="text-[10px] text-slate-400">${info.hasPdf ? 'PDF登録済み' : 'PDF未登録'}</span>
+      <span class="text-[10px] text-slate-400">PDF未登録</span>
     </div>`;
 }
 
