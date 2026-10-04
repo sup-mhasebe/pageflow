@@ -78,3 +78,15 @@ test('ページ数を4にする変更は拒否する', () => {
 test('固定ページ構成は総ページ数の末尾に合わせる', () => {
   assert.deepEqual(fixedLayout(16).map((f) => f.position), [1, 2, 3, 15, 16]);
 });
+
+test('テンプレートIDは standard-booklet（固定ページ構成は従来どおり）', () => {
+  const set = createBooklet('テスト冊子', 8);
+  assert.equal(set.booklet.templateId, 'standard-booklet');
+  assert.deepEqual(fixedLayout(8).map((f) => f.name), ['表紙', '表紙裏', '目次', '裏表紙裏', '裏表紙']);
+});
+
+test('別のtemplateIdで保存済みの冊子データ（過去の保存分）も検証を通り、開ける', async () => {
+  const { bookletRecordSchema } = await import('../src/js/schemas.js');
+  const { booklet } = createBooklet('テスト冊子', 8);
+  assert.equal(bookletRecordSchema.safeParse({ ...booklet, templateId: 'saved-by-earlier-build' }).success, true);
+});
