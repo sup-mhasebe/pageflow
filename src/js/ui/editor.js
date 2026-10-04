@@ -46,6 +46,9 @@ export function renderEditor(state) {
         <div class="flex flex-wrap items-center gap-3">
           <button type="button" class="${btnSecondary}" data-action="go-home">← 一覧へ</button>
           <h1 class="min-w-0 flex-1 truncate text-xl font-bold">${esc(booklet.name)}</h1>
+          <button type="button" class="${btnSecondary}" data-action="export-pageflow" ${state.exporting ? 'disabled' : ''}>
+            ${state.exporting ? '書き出し中…' : 'ビューア用データを書き出す'}
+          </button>
           <span class="text-sm" aria-live="polite">${SAVE_LABEL[state.saveStatus]}</span>
         </div>
         <p class="text-sm text-slate-600">

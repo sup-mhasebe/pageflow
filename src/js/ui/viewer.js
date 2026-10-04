@@ -22,6 +22,22 @@ export function buildViewerModel(current) {
   };
 }
 
+// .pageflow（manifest）から作るビューア用の表示モデル。編集データから作るモデルと同じ形にして、同じ画面部品を使う
+export function buildViewerModelFromManifest(manifest, urlByImageFile) {
+  return {
+    bookletName: manifest.bookletName,
+    totalPages: manifest.totalPages,
+    pages: manifest.pages.map((p) => ({
+      physicalPageNumber: p.pageNo,
+      contentName:
+        p.contentPageIndex !== null && p.contentPageCount > 1
+          ? `${p.contentName} ${circled(p.contentPageIndex)}`
+          : p.contentName,
+      imageUrl: p.imageFile ? (urlByImageFile.get(p.imageFile) ?? null) : null,
+    })),
+  };
+}
+
 // ページ1枚分。画像があれば誌面を、無ければ「PDF未登録」のプレースホルダーを表示する
 function renderPage(page, showInfo) {
   const no = page.physicalPageNumber;

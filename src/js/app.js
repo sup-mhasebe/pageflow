@@ -3,6 +3,7 @@ import * as store from './store.js';
 import { renderHome } from './ui/home.js';
 import { renderCreate, renderFixedPreview } from './ui/create.js';
 import { renderEditor } from './ui/editor.js';
+import { renderImportedViewer } from './ui/imported-viewer.js';
 import { renderModal, renderToast } from './ui/dialog.js';
 import { validateNewBooklet } from './schemas.js';
 import { checkRange, isPlaced } from './domain/placement.js';
@@ -18,6 +19,7 @@ function render(state) {
   if (state.route.name === 'home') body = renderHome(state);
   else if (state.route.name === 'new') body = renderCreate(createForm);
   else if (state.route.name === 'booklet' && state.current) body = renderEditor(state);
+  else if (state.route.name === 'view' && state.imported) body = renderImportedViewer(state);
   else body = '<p class="p-8 text-center text-sm text-slate-500">読み込み中…</p>';
   root.innerHTML = body + renderModal(state) + renderToast(state);
 }
@@ -29,6 +31,7 @@ function parseHash() {
   const m = h.match(/^\/booklet\/([^/]+?)(\/viewer)?$/);
   if (m) return { name: 'booklet', id: decodeURIComponent(m[1]), viewer: !!m[2] };
   if (h === '/new') return { name: 'new' };
+  if (h === '/view') return { name: 'view' }; // 読み込んだ .pageflow のビューア（閲覧専用）
   return { name: 'home' };
 }
 
@@ -47,7 +50,16 @@ async function route() {
       return;
     }
     store.closeBooklet();
-    if (r.name === 'new') {
+    if (r.name !== 'view') store.disposeImported(); // 読み込んだビューア用データはセッション限り。画面を離れたら破棄する
+    if (r.name === 'view') {
+      if (!store.getState().imported) {
+        // 再読み込みや直接アクセスでは .pageflow の内容が残っていない
+        store.showToast('ビューア用データが読み込まれていません。ホームから .pageflow を読み込んでください。', 'error');
+        location.hash = '#/';
+        return;
+      }
+      store.setRoute(r);
+    } else if (r.name === 'new') {
       createForm = { name: '', totalPages: '8', errors: {} };
       store.setRoute(r);
     } else {
@@ -82,6 +94,12 @@ root.addEventListener('click', async (e) => {
         break;
       case 'open-booklet':
         go(`#/booklet/${encodeURIComponent(id)}`);
+        break;
+      case 'export-pageflow':
+        await store.exportViewerData();
+        break;
+      case 'dismiss-import-error':
+        store.dismissImportError();
         break;
       case 'open-viewer':
         go(`#/booklet/${encodeURIComponent(id)}/viewer`);
@@ -235,7 +253,9 @@ root.addEventListener('submit', async (e) => {
 // ---- 冊子ビューア：キーボード（← →）、スワイプ（Pointer Events）、画面幅によるモード切替 ----
 function viewerActive() {
   const st = store.getState();
-  return st.route.name === 'booklet' && st.current && st.tab === 'preview' && !st.modal;
+  if (st.modal) return false;
+  if (st.route.name === 'view') return !!st.imported;
+  return st.route.name === 'booklet' && !!st.current && st.tab === 'preview';
 }
 
 document.addEventListener('keydown', (e) => {
@@ -273,6 +293,17 @@ const compactQuery = window.matchMedia('(max-width: 639px)');
 const syncViewerMode = () => store.setViewerMode(compactQuery.matches ? 'single' : 'spread');
 compactQuery.addEventListener('change', syncViewerMode);
 syncViewerMode();
+
+// ---- ビューア用データ（.pageflow）の選択：標準の <input type="file"> と File API のみを使用 ----
+root.addEventListener('change', async (e) => {
+  const input = e.target.closest('input[data-pageflow-input]');
+  if (!input) return;
+  const file = input.files?.[0];
+  input.value = ''; // 同じファイルを再選択できるようにする
+  if (!file) return;
+  const ok = await store.importViewerData(file);
+  if (ok) location.hash = '#/view'; // 編集画面を経由せず、ビューアを直接開く
+});
 
 // ---- PDFファイル選択：解析モーダルを開く（PDFはブラウザ内で処理し、外部へ送信しない）----
 root.addEventListener('change', async (e) => {

@@ -16,6 +16,7 @@ import { assetOfContent, buildRegistration, buildUnregister, checkPageCount, con
 import * as pdf from './pdf.js';
 import { clearImages, removeImages, setImage } from './images.js';
 import { buildScreens, neighborIndex, screenIndexOf } from './domain/viewer.js';
+import { createPackage, readPackage, safeFileName } from './pageflow-file.js';
 
 // アプリ状態。画面は state を元に描画し、変更は下記の action 経由で行う
 const state = {
@@ -32,6 +33,11 @@ const state = {
   // ビューアの表示状態（閲覧用の一時状態。編集データではないためIndexedDBへは保存しない）
   viewer: { pageNo: 1, showInfo: true, anim: null },
   viewerMode: 'spread', // 'spread'（PC・見開き）| 'single'（スマートフォン・1ページ）
+  // 読み込んだ .pageflow（閲覧専用・セッション限り）。編集用Bookletとは別に保持し、IndexedDBへは保存しない
+  imported: null, // { fileName, manifest, urls: Map<imageFile, objectURL> }
+  importing: false,
+  importError: null, // 読み込みに失敗した理由（ホーム画面に表示）
+  exporting: false,
 };
 
 // 入力中の値を保持する（再描画しても消えないよう state に置くが、通知はしない）
@@ -486,9 +492,16 @@ export function setViewerMode(mode) {
   notify();
 }
 
+// 現在ビューアで表示している冊子の総ページ数（編集データから開いた場合／.pageflow から開いた場合）
+function viewerTotalPages() {
+  if (state.route.name === 'view') return state.imported?.manifest.totalPages ?? null;
+  return state.current?.booklet.totalPages ?? null;
+}
+
 export function viewerNavigate(direction) {
-  if (!state.current) return;
-  const screens = buildScreens(state.current.booklet.totalPages, state.viewerMode);
+  const total = viewerTotalPages();
+  if (!total) return;
+  const screens = buildScreens(total, state.viewerMode);
   const index = screenIndexOf(screens, state.viewer.pageNo);
   const next = neighborIndex(screens, index, direction);
   if (next === index) return; // 先頭・末尾では移動しない
@@ -504,4 +517,84 @@ export function viewerNavigate(direction) {
 export function viewerToggleInfo() {
   state.viewer = { ...state.viewer, showInfo: !state.viewer.showInfo, anim: null };
   notify();
+}
+
+// ---------------------------------------------------------------------------
+// ビューア用データ（.pageflow）の書き出し／読み込み。すべてブラウザ内で完結し、外部へは送信しない
+// ---------------------------------------------------------------------------
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// 編集中の冊子から .pageflow を生成してダウンロードする（元PDF・ゴミ箱・編集情報は含めない）
+export async function exportViewerData() {
+  const cur = state.current;
+  if (!cur || state.exporting) return;
+  state.exporting = true;
+  notify();
+  try {
+    const { images } = await db.loadPdfRecords(cur.booklet.id);
+    const map = new Map();
+    for (const img of images) {
+      map.set(img.id, { bytes: new Uint8Array(await img.imageBlob.arrayBuffer()), type: img.imageBlob.type });
+    }
+    const { bytes, manifest } = createPackage(cur, map);
+    const fileName = safeFileName(cur.booklet.name);
+    downloadBlob(new Blob([bytes], { type: 'application/octet-stream' }), fileName);
+    const withImage = manifest.pages.filter((p) => p.imageFile).length;
+    showToast(`ビューア用データを書き出しました：${fileName}（画像あり ${withImage}/${manifest.totalPages}ページ）`, 'success');
+  } catch (e) {
+    console.error(e);
+    showToast('ビューア用データの書き出しに失敗しました。', 'error');
+  } finally {
+    state.exporting = false;
+    notify();
+  }
+}
+
+export function disposeImported() {
+  if (!state.imported) return;
+  for (const u of state.imported.urls.values()) URL.revokeObjectURL(u);
+  state.imported = null;
+}
+
+export function dismissImportError() {
+  state.importError = null;
+  notify();
+}
+
+// .pageflow を読み込み、検証に成功したらビューア用に保持する。読み込んだデータは編集用Bookletとして登録しない
+export async function importViewerData(file) {
+  state.importError = null;
+  state.importing = true;
+  notify();
+  try {
+    const result = readPackage(new Uint8Array(await file.arrayBuffer()), file.name);
+    if (!result.ok) {
+      state.importError = `「${file.name}」を読み込めませんでした。${result.reason}`;
+      return false;
+    }
+    disposeImported();
+    const urls = new Map();
+    for (const [imageFile, img] of result.images) {
+      urls.set(imageFile, URL.createObjectURL(new Blob([img.bytes], { type: img.type })));
+    }
+    state.imported = { fileName: file.name, manifest: result.manifest, urls };
+    state.viewer = { ...state.viewer, pageNo: 1, anim: null };
+    return true;
+  } catch (e) {
+    console.error(e);
+    state.importError = `「${file.name}」を読み込めませんでした。ファイルを読み取れないか、形式が正しくありません。`;
+    return false;
+  } finally {
+    state.importing = false;
+    notify();
+  }
 }
