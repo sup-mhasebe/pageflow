@@ -169,12 +169,12 @@ function renderDetail({ booklet, contents, pages, pdfAssets }, selectedNo) {
       <h2 class="mb-3 text-sm font-semibold">冊子設定</h2>
       <form data-form="rename" class="mb-4 space-y-2" novalidate>
         <label for="s-name" class="block text-xs font-medium text-slate-600">冊子名</label>
-        <input id="s-name" name="name" type="text" class="${inputCls}" value="${esc(booklet.name)}" autocomplete="off" />
+        <input id="s-name" data-keep-value name="name" type="text" class="${inputCls}" value="${esc(booklet.name)}" autocomplete="off" />
         <button type="submit" class="${btnSecondary}">冊子名を変更</button>
       </form>
       <form data-form="resize" class="mb-4 space-y-2" novalidate>
         <label for="s-total" class="block text-xs font-medium text-slate-600">総ページ数（8以上の4の倍数）</label>
-        <input id="s-total" name="totalPages" type="text" inputmode="numeric" class="${inputCls}" value="${booklet.totalPages}" autocomplete="off" />
+        <input id="s-total" data-keep-value name="totalPages" type="text" inputmode="numeric" class="${inputCls}" value="${booklet.totalPages}" autocomplete="off" />
         <button type="submit" class="${btnSecondary}">総ページ数を変更</button>
         <p class="text-xs text-slate-500">増加は可能です。減少は、削除される末尾ページと新しい固定ページ位置にコンテンツが無い場合のみ可能です。</p>
       </form>

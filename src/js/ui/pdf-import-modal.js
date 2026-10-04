@@ -73,7 +73,7 @@ function renderMapping(m) {
 export function renderPdfImportModal(m) {
   const cancel = `<button type="button" class="${btnSecondary}" data-action="cancel-modal">キャンセル</button>`;
   const frame = (inner, footer) => `
-    <div class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+    <div class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4" data-scroll-key="modal" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
       <div class="my-4 w-full max-w-2xl rounded-lg bg-white p-5 shadow-xl">
         <h2 id="dlg-title" class="mb-1 text-lg font-semibold">PDFを登録</h2>
         <p class="mb-3 break-all text-sm text-slate-600">コンテンツ「${esc(m.contentName)}」（必要${m.required}ページ・P${m.start}から）／${esc(m.fileName)}</p>

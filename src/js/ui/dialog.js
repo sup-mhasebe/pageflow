@@ -7,7 +7,7 @@ export function renderModal(state) {
   if (!m) return '';
   if (m.type === 'delete-booklet') {
     return `
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-scroll-key="modal" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
         <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
           <h2 id="dlg-title" class="mb-2 text-lg font-semibold">冊子を削除しますか？</h2>
           <p class="mb-1 break-words text-sm font-medium">「${esc(m.name)}」</p>
@@ -30,7 +30,7 @@ export function renderModal(state) {
       ? `<p class="mb-2 text-sm text-slate-700">このコンテンツにはPDFが登録されています。PDFの扱いを選んでください。</p>${modeRadios(m.mode, 'content')}<div class="mb-4"></div>`
       : '';
     return `
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-scroll-key="modal" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
         <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
           <h2 id="dlg-title" class="mb-2 text-lg font-semibold">コンテンツを削除</h2>
           <p class="mb-1 break-words text-sm font-medium">「${esc(m.name)}」</p>
@@ -46,7 +46,7 @@ export function renderModal(state) {
   if (m.type === 'pdf-import') return renderPdfImportModal(m);
   if (m.type === 'unregister-pdf') {
     return `
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-scroll-key="modal" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
         <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
           <h2 id="dlg-title" class="mb-2 text-lg font-semibold">PDF登録を解除</h2>
           <p class="mb-1 break-words text-sm font-medium">「${esc(m.contentName)}」／${esc(m.fileName)}</p>
@@ -62,17 +62,17 @@ export function renderModal(state) {
   if (m.type === 'edit-content') {
     const err = (e) => (e ? `<p class="mt-1 text-xs text-red-600" role="alert">${esc(e)}</p>` : '');
     return `
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-scroll-key="modal" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
         <form data-form="edit-content" data-id="${esc(m.id)}" class="w-full max-w-md space-y-3 rounded-lg bg-white p-5 shadow-xl" novalidate>
           <h2 id="dlg-title" class="text-lg font-semibold">コンテンツを編集</h2>
           <div>
             <label for="e-name" class="block text-sm font-medium">コンテンツ名</label>
-            <input id="e-name" name="name" type="text" class="${inputCls}" value="${esc(m.name)}" autocomplete="off" />
+            <input id="e-name" data-keep-value name="name" type="text" class="${inputCls}" value="${esc(m.name)}" autocomplete="off" />
             ${err(m.errors?.name)}
           </div>
           <div>
             <label for="e-pages" class="block text-sm font-medium">必要ページ数</label>
-            <input id="e-pages" name="requiredPages" type="text" inputmode="numeric" class="${inputCls}" value="${esc(m.requiredPages)}" autocomplete="off" />
+            <input id="e-pages" data-keep-value name="requiredPages" type="text" inputmode="numeric" class="${inputCls}" value="${esc(m.requiredPages)}" autocomplete="off" />
             ${err(m.errors?.requiredPages)}
           </div>
           <div class="flex justify-end gap-3">

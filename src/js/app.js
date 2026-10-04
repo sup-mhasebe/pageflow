@@ -7,6 +7,7 @@ import { renderImportedViewer } from './ui/imported-viewer.js';
 import { renderModal, renderToast } from './ui/dialog.js';
 import { validateNewBooklet } from './schemas.js';
 import { checkRange, isPlaced } from './domain/placement.js';
+import { captureViewState, restoreViewState } from './ui/view-state.js';
 
 const root = document.getElementById('app');
 
@@ -21,8 +22,14 @@ function render(state) {
   else if (state.route.name === 'booklet' && state.current) body = renderEditor(state);
   else if (state.route.name === 'view' && state.imported) body = renderImportedViewer(state);
   else body = '<p class="p-8 text-center text-sm text-slate-500">読み込み中…</p>';
+  // 再描画をまたいで、スクロール位置・フォーカス・入力途中の文字を保つ
+  const viewKey = `${state.route.name}:${state.route.id ?? ''}:${state.tab}`;
+  const snap = captureViewState(root, lastViewKey === viewKey ? viewKey : null);
   root.innerHTML = body + renderModal(state) + renderToast(state);
+  restoreViewState(root, snap, viewKey);
+  lastViewKey = viewKey;
 }
+let lastViewKey = null;
 store.subscribe(render);
 
 // ---- ルーティング（ハッシュ。アプリ内の画面遷移用で、冊子の共有URLではない） ----
