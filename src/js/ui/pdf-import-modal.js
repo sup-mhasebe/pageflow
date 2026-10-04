@@ -2,10 +2,12 @@ import { esc, btnSecondary, btnPrimary } from './util.js';
 
 // 旧PDF／元PDFの扱いの選択（どちらも選ばない限り確定できない＝黙って消さない）
 export function modeRadios(mode, kind) {
-  const label =
-    kind === 'replace'
-      ? ['旧PDFをゴミ箱へ移動して差し替える', '旧PDFを完全削除して差し替える']
-      : ['元PDFをゴミ箱へ移動する', '元PDFを完全削除する'];
+  const labels = {
+    replace: ['旧PDFをゴミ箱へ移動して差し替える', '旧PDFを完全削除して差し替える'],
+    unregister: ['元PDFをゴミ箱へ移動する', '元PDFを完全削除する'],
+    content: ['PDFをゴミ箱へ移してコンテンツを削除', 'PDFも完全削除してコンテンツを削除'],
+  };
+  const label = labels[kind];
   const row = (value, text) => `
     <label class="flex cursor-pointer items-start gap-2 text-sm">
       <input type="radio" name="pdf-mode-${kind}" class="mt-0.5" data-action="set-pdf-mode" data-mode="${value}" ${mode === value ? 'checked' : ''} />

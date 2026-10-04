@@ -26,8 +26,8 @@ store.subscribe(render);
 // ---- ルーティング（ハッシュ。アプリ内の画面遷移用で、冊子の共有URLではない） ----
 function parseHash() {
   const h = location.hash.replace(/^#/, '');
-  const m = h.match(/^\/booklet\/([^/]+)$/);
-  if (m) return { name: 'booklet', id: decodeURIComponent(m[1]) };
+  const m = h.match(/^\/booklet\/([^/]+?)(\/viewer)?$/);
+  if (m) return { name: 'booklet', id: decodeURIComponent(m[1]), viewer: !!m[2] };
   if (h === '/new') return { name: 'new' };
   return { name: 'home' };
 }
@@ -41,7 +41,9 @@ async function route() {
       if (!ok) {
         store.showToast('指定された冊子が見つかりません。', 'error');
         location.hash = '#/';
+        return;
       }
+      if (r.viewer) store.setTab('preview'); // 一覧の［ビューア］から：冊子プレビュー（ビューア）を開く
       return;
     }
     store.closeBooklet();
@@ -81,6 +83,18 @@ root.addEventListener('click', async (e) => {
       case 'open-booklet':
         go(`#/booklet/${encodeURIComponent(id)}`);
         break;
+      case 'open-viewer':
+        go(`#/booklet/${encodeURIComponent(id)}/viewer`);
+        break;
+      case 'viewer-prev':
+        store.viewerNavigate('prev');
+        break;
+      case 'viewer-next':
+        store.viewerNavigate('next');
+        break;
+      case 'viewer-toggle-info':
+        store.viewerToggleInfo();
+        break;
       case 'select-page':
         store.selectPage(Number(no));
         break;
@@ -118,13 +132,15 @@ root.addEventListener('click', async (e) => {
         const c = contents.find((x) => x.id === id);
         if (c) {
           const hasPdf = store.getState().current.pdfAssets.some((a) => a.contentId === c.id);
-          store.setModal({ type: 'delete-content', id: c.id, name: c.name, placed: isPlaced(pages, c.id), hasPdf });
+          store.setModal({ type: 'delete-content', id: c.id, name: c.name, placed: isPlaced(pages, c.id), hasPdf, mode: null });
         }
         break;
       }
       case 'confirm-delete-content': {
+        const m = store.getState().modal;
+        const mode = m?.mode; // PDF登録済みの場合にユーザーが選んだ扱い
         store.setModal(null);
-        const r = await store.deleteContentAction(id);
+        const r = await store.deleteContentAction(id, mode);
         if (!r.ok) store.showToast(r.reason, 'error');
         else store.showToast('コンテンツを削除しました。', 'success');
         break;
@@ -139,7 +155,7 @@ root.addEventListener('click', async (e) => {
         // 差し替え／登録解除時の「旧PDF・元PDFの扱い」の選択
         const m = store.getState().modal;
         if (m?.type === 'pdf-import') store.patchModal({ replaceMode: el.dataset.mode });
-        else if (m?.type === 'unregister-pdf') store.patchModal({ mode: el.dataset.mode });
+        else if (m?.type === 'unregister-pdf' || m?.type === 'delete-content') store.patchModal({ mode: el.dataset.mode });
         break;
       }
       case 'confirm-pdf-import':
@@ -215,6 +231,48 @@ root.addEventListener('submit', async (e) => {
     store.showToast('操作に失敗しました。', 'error');
   }
 });
+
+// ---- 冊子ビューア：キーボード（← →）、スワイプ（Pointer Events）、画面幅によるモード切替 ----
+function viewerActive() {
+  const st = store.getState();
+  return st.route.name === 'booklet' && st.current && st.tab === 'preview' && !st.modal;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!viewerActive() || e.altKey || e.ctrlKey || e.metaKey) return;
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  const tag = e.target?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return; // 入力中は奪わない
+  e.preventDefault();
+  store.viewerNavigate(e.key === 'ArrowRight' ? 'next' : 'prev');
+});
+
+// スワイプ：左へスワイプ＝次へ、右へスワイプ＝前へ（マウスのドラッグは対象外）
+const SWIPE_MIN_PX = 50;
+let swipe = null;
+root.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse' || !e.target.closest('[data-viewer-stage]')) return;
+  swipe = { id: e.pointerId, x: e.clientX, y: e.clientY };
+});
+window.addEventListener('pointerup', (e) => {
+  if (!swipe || e.pointerId !== swipe.id) return;
+  const dx = e.clientX - swipe.x;
+  const dy = e.clientY - swipe.y;
+  swipe = null;
+  if (!viewerActive()) return;
+  if (Math.abs(dx) >= SWIPE_MIN_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
+    store.viewerNavigate(dx < 0 ? 'next' : 'prev');
+  }
+});
+window.addEventListener('pointercancel', () => {
+  swipe = null;
+});
+
+// スマートフォン幅（〜639px）は1ページ表示、それ以上は見開き表示
+const compactQuery = window.matchMedia('(max-width: 639px)');
+const syncViewerMode = () => store.setViewerMode(compactQuery.matches ? 'single' : 'spread');
+compactQuery.addEventListener('change', syncViewerMode);
+syncViewerMode();
 
 // ---- PDFファイル選択：解析モーダルを開く（PDFはブラウザ内で処理し、外部へ送信しない）----
 root.addEventListener('change', async (e) => {

@@ -1,8 +1,9 @@
 import { esc, btnSecondary } from './util.js';
 import { usage } from '../domain/booklet.js';
 import { capacity } from '../domain/content.js';
-import { renderCompose, renderComingSoon } from './compose.js';
+import { renderCompose } from './compose.js';
 import { renderImposition } from './imposition-view.js';
+import { renderViewer, buildViewerModel } from './viewer.js';
 
 const TABS = [
   { key: 'compose', label: '構成' },
@@ -36,7 +37,7 @@ export function renderEditor(state) {
 
   let body;
   if (state.tab === 'compose') body = renderCompose(state);
-  else if (state.tab === 'preview') body = renderComingSoon('冊子プレビュー');
+  else if (state.tab === 'preview') body = renderViewer(buildViewerModel(state.current), state.viewer, state.viewerMode);
   else body = renderImposition(state);
 
   return `

@@ -71,11 +71,17 @@ export function updateContent(state, contentId, rawName, rawRequiredPages) {
 }
 
 // コンテンツ削除。配置済みなら配置も解除する（呼び出し側で必ずユーザー確認を取ること）。
-// 登録済みPDFがある場合は、完全削除せずゴミ箱へ移動する（trashAssetIds で DB 層に指示）。
-export function deleteContent(state, contentId) {
+// 登録済みPDFがある場合は、PDFの扱い mode（'trash'＝ゴミ箱へ移す／'delete'＝完全削除）をユーザーに選ばせる。
+// 選択なしにPDFを自動でゴミ箱へ移したり削除したりしない（mode 未指定は拒否）。
+// どちらの mode でも Content と冊子ページへの配置は削除する。
+export function deleteContent(state, contentId, mode) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, reason: 'コンテンツが見つかりません。' };
   if (content.isFixed) return { ok: false, reason: '固定ページは削除できません。' };
+  const existing = assetOfContent(state, contentId);
+  if (existing && mode !== 'trash' && mode !== 'delete') {
+    return { ok: false, reason: 'PDFの扱い（ゴミ箱へ移す／完全削除）を選択してください。' };
+  }
   let pages = state.pages;
   if (isPlaced(pages, contentId)) {
     const r = unplaceContent(state, contentId);
@@ -91,7 +97,8 @@ export function deleteContent(state, contentId) {
     pdfAssets: (state.pdfAssets ?? []).filter((a) => a.id !== asset?.id),
     renderImages: (state.renderImages ?? []).filter((i) => i.pdfAssetId !== asset?.id),
     removedImageIds,
-    trashAssetIds: asset ? [asset.id] : [],
+    trashAssetIds: asset && mode === 'trash' ? [asset.id] : [],
+    deleteAssetIds: asset && mode === 'delete' ? [asset.id] : [],
   };
 }
 

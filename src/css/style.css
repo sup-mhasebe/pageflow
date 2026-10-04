@@ -4,3 +4,39 @@
 .page-thumb {
   aspect-ratio: 210 / 297;
 }
+
+/* ---- 冊子ビューア ---- */
+/* ページの高さを基準に、A4縦(210:297)の比率を維持して幅を決める（画像は引き伸ばさない） */
+.viewer-stage {
+  --ph: min(calc(100dvh - 300px), calc((100vw - 4rem) * 297 / 420));
+  touch-action: pan-y;
+}
+.viewer-stage[data-mode="single"] {
+  --ph: min(calc(100dvh - 280px), calc((100vw - 3.5rem) * 297 / 210));
+}
+.viewer-pages {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+.viewer-page {
+  height: max(var(--ph), 240px);
+  aspect-ratio: 210 / 297;
+  flex: none;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+}
+
+/* 軽量なページ切替アニメーション（スライド＋フェード）。3Dページめくりは使わない */
+@keyframes viewer-in-next {
+  from { opacity: 0; transform: translateX(28px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes viewer-in-prev {
+  from { opacity: 0; transform: translateX(-28px); }
+  to { opacity: 1; transform: none; }
+}
+.viewer-anim-next { animation: viewer-in-next 0.22s ease-out; }
+.viewer-anim-prev { animation: viewer-in-prev 0.22s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .viewer-anim-next, .viewer-anim-prev { animation: none; }
+}

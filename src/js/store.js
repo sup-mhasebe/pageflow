@@ -15,6 +15,7 @@ import { placeContent, unplaceContent, startPageOf } from './domain/placement.js
 import { assetOfContent, buildRegistration, buildUnregister, checkPageCount, convertedPageCount } from './domain/pdf.js';
 import * as pdf from './pdf.js';
 import { clearImages, removeImages, setImage } from './images.js';
+import { buildScreens, neighborIndex, screenIndexOf } from './domain/viewer.js';
 
 // アプリ状態。画面は state を元に描画し、変更は下記の action 経由で行う
 const state = {
@@ -28,6 +29,9 @@ const state = {
   modal: null,
   toast: null,
   contentDraft: { name: '', requiredPages: '1', errors: {} }, // コンテンツ追加フォームの入力
+  // ビューアの表示状態（閲覧用の一時状態。編集データではないためIndexedDBへは保存しない）
+  viewer: { pageNo: 1, showInfo: true, anim: null },
+  viewerMode: 'spread', // 'spread'（PC・見開き）| 'single'（スマートフォン・1ページ）
 };
 
 // 入力中の値を保持する（再描画しても消えないよう state に置くが、通知はしない）
@@ -142,6 +146,7 @@ export async function openBooklet(id) {
   state.current = set;
   state.selectedPageNo = null;
   state.tab = 'compose';
+  state.viewer = { pageNo: 1, showInfo: state.viewer.showInfo, anim: null };
   state.saveStatus = 'saved';
   notify();
   return true;
@@ -264,9 +269,9 @@ export async function updateContentAction(id, rawName, rawRequiredPages) {
 }
 
 // 削除（配置済みの場合の確認は UI 側で必ず取る）
-export async function deleteContentAction(id) {
+export async function deleteContentAction(id, mode) {
   const cur = state.current;
-  const r = deleteContent(cur, id);
+  const r = deleteContent(cur, id, mode);
   if (!r.ok) return r;
   await commitCurrent({
     contents: r.contents,
@@ -274,7 +279,8 @@ export async function deleteContentAction(id) {
     pdfAssets: r.pdfAssets,
     renderImages: r.renderImages,
     removedContentIds: [id],
-    trashAssetIds: r.trashAssetIds, // 登録済みPDFは完全削除せずゴミ箱へ移動する
+    trashAssetIds: r.trashAssetIds, // PDFをゴミ箱へ移す場合（元PDFのBlobを保持）
+    deleteAssetIds: r.deleteAssetIds, // PDFも完全削除する場合
     removedImageIds: r.removedImageIds,
   });
   return { ok: true };
@@ -467,4 +473,35 @@ export async function confirmUnregisterPdf() {
   });
   setModal(null);
   showToast(m.mode === 'trash' ? 'PDF登録を解除しました（元PDFはゴミ箱へ移動）。' : 'PDF登録を解除しました（元PDFは完全削除）。', 'success');
+}
+
+// ---------------------------------------------------------------------------
+// 冊子ビューア（閲覧専用）。ここでは state.viewer だけを変更し、編集データ・IndexedDB には触れない
+// ---------------------------------------------------------------------------
+let animTimer = null;
+
+export function setViewerMode(mode) {
+  if (state.viewerMode === mode) return;
+  state.viewerMode = mode;
+  notify();
+}
+
+export function viewerNavigate(direction) {
+  if (!state.current) return;
+  const screens = buildScreens(state.current.booklet.totalPages, state.viewerMode);
+  const index = screenIndexOf(screens, state.viewer.pageNo);
+  const next = neighborIndex(screens, index, direction);
+  if (next === index) return; // 先頭・末尾では移動しない
+  state.viewer = { ...state.viewer, pageNo: screens[next][0], anim: direction };
+  notify();
+  // アニメーションのクラスは再生後に外す（以降の再描画で再生し直さない）
+  clearTimeout(animTimer);
+  animTimer = setTimeout(() => {
+    state.viewer = { ...state.viewer, anim: null };
+  }, 300);
+}
+
+export function viewerToggleInfo() {
+  state.viewer = { ...state.viewer, showInfo: !state.viewer.showInfo, anim: null };
+  notify();
 }

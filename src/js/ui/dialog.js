@@ -25,8 +25,9 @@ export function renderModal(state) {
     const msg = m.placed
       ? 'このコンテンツは冊子に配置されています。削除すると配置も解除されます。削除しますか？'
       : 'このコンテンツを削除しますか？';
+    // PDF登録済みのコンテンツは、PDFの扱いを選ぶまで削除できない
     const pdfNote = m.hasPdf
-      ? '<p class="mb-4 text-sm text-slate-700">登録済みのPDFは、完全には削除されず「ゴミ箱」へ移動します。</p>'
+      ? `<p class="mb-2 text-sm text-slate-700">このコンテンツにはPDFが登録されています。PDFの扱いを選んでください。</p>${modeRadios(m.mode, 'content')}<div class="mb-4"></div>`
       : '';
     return `
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
@@ -37,7 +38,7 @@ export function renderModal(state) {
           <div class="flex justify-end gap-3">
             <button type="button" class="${btnSecondary}" data-action="cancel-modal">キャンセル</button>
             <button type="button" class="inline-flex items-center rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
-              data-action="confirm-delete-content" data-id="${esc(m.id)}">削除する</button>
+              data-action="confirm-delete-content" data-id="${esc(m.id)}" ${m.hasPdf && !m.mode ? 'disabled' : ''}>削除する</button>
           </div>
         </div>
       </div>`;

@@ -10,7 +10,7 @@ function bookletCard(b) {
       </div>
       <div class="mt-auto flex flex-wrap gap-2">
         <button type="button" class="${btnPrimary}" data-action="open-booklet" data-id="${esc(b.id)}">編集</button>
-        <button type="button" class="${btnSecondary}" disabled title="冊子ビューアは後続のPhaseで実装します">ビューア</button>
+        <button type="button" class="${btnSecondary}" data-action="open-viewer" data-id="${esc(b.id)}">ビューア</button>
         <button type="button" class="${btnDanger}" data-action="ask-delete" data-id="${esc(b.id)}">削除</button>
       </div>
     </li>`;

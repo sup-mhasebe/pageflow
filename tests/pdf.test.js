@@ -342,13 +342,57 @@ test('コンテンツのページ数増加：PDF登録済みでも後続が空�
   assert.deepEqual(mapping({ ...s1, pages: r.pages }, [4, 5, 6]), ['1', '2', '未登録']);
 });
 
-test('コンテンツ削除：登録済みPDFはゴミ箱へ（trashAssetIds）。完全削除にはならない', () => {
+test('コンテンツ削除（PDFあり）：扱いを選ばない場合は拒否し、何も変更しない', () => {
   const { state, id } = setup(2, 4);
   const { state: s1 } = register(state, id, ['a4', 'a4']);
-  const r = deleteContent(s1, id);
+  const before = JSON.stringify(s1.pages);
+  for (const mode of [undefined, null, '', 'cancel']) {
+    const r = deleteContent(s1, id, mode);
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /PDFの扱い/);
+  }
+  assert.equal(JSON.stringify(s1.pages), before);
+});
+
+test('コンテンツ削除（PDFをゴミ箱へ）：Contentと配置は削除、PDFはtrashAssetIdsへ（完全削除ではない）', () => {
+  const { state, id } = setup(2, 4);
+  const { state: s1 } = register(state, id, ['a4', 'a4']);
+  const r = deleteContent(s1, id, 'trash');
   assert.equal(r.ok, true);
   assert.deepEqual(r.trashAssetIds, [s1.pdfAssets[0].id]);
+  assert.deepEqual(r.deleteAssetIds, []);
+  assert.equal(r.contents.some((c) => c.id === id), false); // Contentは削除
+  assert.equal(r.pages.some((p) => p.contentId === id), false); // 配置も削除
   assert.equal(r.pdfAssets.length, 0);
   assert.equal(r.renderImages.length, 0);
-  assert.equal(r.pages.some((p) => p.renderImageId), false);
+  assert.equal(r.pages.some((p) => p.renderImageId || p.pdfAssetId), false);
+});
+
+test('コンテンツ削除（PDFも完全削除）：PdfAsset・RenderImageはdeleteAssetIdsへ、trashには入らない', () => {
+  const { state, id } = setup(2, 4);
+  const { state: s1 } = register(state, id, ['a4', 'a4']);
+  const r = deleteContent(s1, id, 'delete');
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.deleteAssetIds, [s1.pdfAssets[0].id]);
+  assert.deepEqual(r.trashAssetIds, []);
+  assert.equal(r.contents.some((c) => c.id === id), false);
+  assert.equal(r.pages.some((p) => p.contentId === id), false);
+  assert.equal(r.removedImageIds.length, 2);
+});
+
+test('コンテンツ削除（PDFなし）：mode不要で通常どおり削除できる', () => {
+  const { state, id } = setup(2, 4);
+  const r = deleteContent(state, id);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.trashAssetIds, []);
+  assert.deepEqual(r.deleteAssetIds, []);
+});
+
+test('コンテンツ削除（PDFあり・未配置）：未配置でもPDFの扱いの選択が必要', () => {
+  const { state, id } = setup(2, 4);
+  const { state: s1 } = register(state, id, ['a4']);
+  const un = unplaceContent(s1, id);
+  const s2 = { ...s1, pages: un.pages };
+  assert.equal(deleteContent(s2, id).ok, false);
+  assert.equal(deleteContent(s2, id, 'trash').ok, true);
 });
