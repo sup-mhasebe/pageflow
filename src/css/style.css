@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* ページカードのサムネイル枠（A4縦比率） */
+.page-thumb {
+  aspect-ratio: 210 / 297;
+}
