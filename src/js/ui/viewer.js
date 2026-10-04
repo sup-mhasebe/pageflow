@@ -3,7 +3,7 @@ import { getImageUrl } from '../images.js';
 import { buildScreens, screenIndexOf } from '../domain/viewer.js';
 
 // ビューア用の表示モデル（編集データから読み取り専用で作る）。
-// 後続の .pageflow 読み込みでも同じ形のモデルを渡せるよう、画面（HTML）はこのモデルだけに依存させる。
+// .pageflow 読み込み時も同じ形のモデルを渡せるよう、画面（HTML）はこのモデルだけに依存させる。
 export function buildViewerModel(current) {
   const { booklet, contents, pages } = current;
   const byId = new Map(contents.map((c) => [c.id, c]));

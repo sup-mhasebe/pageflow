@@ -2,7 +2,7 @@
 const DB_NAME = 'pageflow';
 const DB_VERSION = 1;
 
-// ストア名 → 検索用インデックス。Blobを扱うストアはPhase 4以降で使用する
+// ストア名 → 検索用インデックス（pdfAssets / renderImages / trashPdfs は Blob を保持する）
 const STORE_DEFS = {
   booklets: null,
   contents: 'bookletId',
@@ -124,19 +124,6 @@ export async function loadPdfRecords(bookletId) {
   }
   const assets = rawAssets.map(({ blob, ...meta }) => meta);
   return { assets, images };
-}
-
-// 簡易ゴミ箱の内容（元PDFのBlobを保持。復元UIは後続Phaseで実装）
-export async function listTrashRecords(bookletId) {
-  const db = await openDb();
-  return request(db.transaction('trashPdfs').objectStore('trashPdfs').index('bookletId').getAll(bookletId));
-}
-
-// 元PDFのBlobを取得する（差し替え・後続処理用）
-export async function getPdfBlob(assetId) {
-  const db = await openDb();
-  const rec = await request(db.transaction('pdfAssets').objectStore('pdfAssets').get(assetId));
-  return rec?.blob ?? null;
 }
 
 // 冊子に紐づく全データを1トランザクションで削除する

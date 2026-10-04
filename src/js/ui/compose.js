@@ -191,9 +191,3 @@ export function renderCompose(state) {
       <aside class="space-y-4">${renderDetail(cur, state.selectedPageNo)}</aside>
     </div>`;
 }
-
-// 未実装タブの案内（冊子プレビュー・面付は後続Phase）
-export function renderComingSoon(title) {
-  return `<div class="rounded-lg border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">
-    ${esc(title)}は準備中です。</div>`;
-}

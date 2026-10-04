@@ -73,7 +73,7 @@ export function usage(totalPages, contents, pages) {
   return { total: totalPages, fixed, content, empty: totalPages - fixed - content };
 }
 
-// 総ページ数の変更（Phase 1〜3 は安全側：配置済みデータを自動で動かさない・消さない）
+// 総ページ数の変更（安全側：配置済みデータやPDFを自動で動かさない・消さない）
 //  - 増加：可能
 //  - 減少：削除対象の末尾ページ／新たに固定ページになる位置にユーザー配置が無い場合のみ可能
 //  - 固定ページは変更後の末尾に合わせて再配置

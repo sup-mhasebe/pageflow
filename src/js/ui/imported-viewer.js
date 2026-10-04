@@ -10,7 +10,7 @@ export function renderImportedViewer(state) {
     <div class="mx-auto max-w-7xl px-4 py-4">
       <header class="mb-4 flex flex-wrap items-center gap-3">
         <button type="button" class="${btnSecondary}" data-action="go-home">← ホームへ</button>
-        <h1 class="min-w-0 flex-1 truncate text-xl font-bold" data-imported-title>${esc(manifest.bookletName)}</h1>
+        <h1 class="order-last w-full min-w-0 break-words text-xl font-bold sm:order-none sm:w-auto sm:flex-1 sm:truncate" data-imported-title>${esc(manifest.bookletName)}</h1>
         <span class="rounded bg-slate-200 px-2 py-1 text-xs text-slate-700" title="${esc(fileName)}">ビューア専用データ（閲覧のみ）</span>
       </header>
       ${renderViewer(model, state.viewer, state.viewerMode)}

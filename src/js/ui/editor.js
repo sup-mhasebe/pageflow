@@ -45,7 +45,7 @@ export function renderEditor(state) {
       <header class="mb-4 space-y-2">
         <div class="flex flex-wrap items-center gap-3">
           <button type="button" class="${btnSecondary}" data-action="go-home">← 一覧へ</button>
-          <h1 class="min-w-0 flex-1 truncate text-xl font-bold">${esc(booklet.name)}</h1>
+          <h1 class="order-last w-full min-w-0 break-words text-xl font-bold sm:order-none sm:w-auto sm:flex-1 sm:truncate">${esc(booklet.name)}</h1>
           <button type="button" class="${btnSecondary}" data-action="export-pageflow" ${state.exporting ? 'disabled' : ''}>
             ${state.exporting ? '書き出し中…' : 'ビューア用データを書き出す'}
           </button>

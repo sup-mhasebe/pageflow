@@ -2,7 +2,7 @@
 //
 // .pageflow = ZIP形式の1ファイル（拡張子のみ .pageflow）
 //   manifest.json            … ビューアの表示に必要な最小限の情報
-//   pages/page-001.webp …    … 生成済みのページ画像（Phase 4 の RenderImage をそのまま格納）
+//   pages/page-001.webp …    … 生成済みのページ画像（PDF登録時に生成したRenderImageをそのまま格納）
 // 元PDF・TrashPdf・コンテンツ編集情報・編集履歴などの編集用データは含めない。
 //
 // 外部から受け取るファイルとして扱い、展開前後にサイズ・構造・画像の中身を検証する。
