@@ -8,6 +8,8 @@ import {
   parseTotalPagesInput,
 } from './schemas.js';
 import { createBooklet, resizeBooklet } from './domain/booklet.js';
+import { addContent, updateContent, deleteContent, sortContents } from './domain/content.js';
+import { placeContent, unplaceContent } from './domain/placement.js';
 
 // アプリ状態。画面は state を元に描画し、変更は下記の action 経由で行う
 const state = {
@@ -20,7 +22,13 @@ const state = {
   saveStatus: 'saved', // saving | saved | error
   modal: null,
   toast: null,
+  contentDraft: { name: '', requiredPages: '1', errors: {} }, // コンテンツ追加フォームの入力
 };
+
+// 入力中の値を保持する（再描画しても消えないよう state に置くが、通知はしない）
+export function setContentDraft(draft) {
+  state.contentDraft = draft;
+}
 
 const listeners = new Set();
 export const getState = () => state;
@@ -76,12 +84,10 @@ function parseBookletSet(raw) {
   if (!booklet.success || contents.some((r) => !r.success) || pages.some((r) => !r.success)) {
     return null;
   }
-  // IndexedDB はキー（UUID）順で返すため、固定コンテンツを表紙→裏表紙の順に並べ直す
-  const order = ['表紙', '表紙裏', '目次', '裏表紙裏', '裏表紙'];
-  const rank = (c) => (c.isFixed ? order.indexOf(c.name) : order.length);
+  // IndexedDB はキー順で返すため、表示順（固定→ユーザーコンテンツ作成順）に並べ直す
   return {
     booklet: booklet.data,
-    contents: contents.map((r) => r.data).sort((a, b) => rank(a) - rank(b)),
+    contents: sortContents(contents.map((r) => r.data)),
     pages: pages.map((r) => r.data),
   };
 }
@@ -175,6 +181,59 @@ export async function resizeBookletAction(rawTotalPages) {
   if (state.selectedPageNo > result.booklet.totalPages) state.selectedPageNo = null;
   notify();
   return { ok: true };
+}
+
+// 冊子内データ（コンテンツ・ページ）の変更を保存して反映する共通処理
+async function commitCurrent({ contents, pages, removedContentIds = [] }) {
+  const cur = state.current;
+  const booklet = { ...cur.booklet, updatedAt: new Date().toISOString() };
+  await persist({ booklet, contents, pages, removedContentIds });
+  state.current = { booklet, contents: sortContents(contents), pages };
+  notify();
+}
+
+export async function addContentAction(rawName, rawRequiredPages) {
+  const r = addContent(state.current, rawName, rawRequiredPages);
+  if (!r.ok) return r;
+  await commitCurrent({ contents: [...state.current.contents, r.content], pages: state.current.pages });
+  return { ok: true };
+}
+
+export async function updateContentAction(id, rawName, rawRequiredPages) {
+  const cur = state.current;
+  const r = updateContent(cur, id, rawName, rawRequiredPages);
+  if (!r.ok) return r;
+  await commitCurrent({
+    contents: cur.contents.map((c) => (c.id === id ? r.content : c)),
+    pages: r.pages,
+  });
+  return { ok: true };
+}
+
+// 削除（配置済みの場合の確認は UI 側で必ず取る）
+export async function deleteContentAction(id) {
+  const cur = state.current;
+  const r = deleteContent(cur, id);
+  if (!r.ok) return r;
+  await commitCurrent({ contents: r.contents, pages: r.pages, removedContentIds: [id] });
+  return { ok: true };
+}
+
+// D&Dによる配置・移動。拒否時は何も変更せず理由を返す
+export async function placeContentAction(contentId, startNo) {
+  const cur = state.current;
+  const r = placeContent(cur, contentId, startNo);
+  if (!r.ok || r.unchanged) return r;
+  await commitCurrent({ contents: cur.contents, pages: r.pages });
+  return r;
+}
+
+export async function unplaceContentAction(contentId) {
+  const cur = state.current;
+  const r = unplaceContent(cur, contentId);
+  if (!r.ok) return r;
+  await commitCurrent({ contents: cur.contents, pages: r.pages });
+  return r;
 }
 
 export async function deleteBookletAction(id) {

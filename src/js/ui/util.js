@@ -2,6 +2,9 @@
 export const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
+// 丸数字（①②…）。21以上は (n) 表記
+export const circled = (n) => (n >= 1 && n <= 20 ? String.fromCodePoint(0x2460 + n - 1) : `(${n})`);
+
 export function formatDateTime(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '-';

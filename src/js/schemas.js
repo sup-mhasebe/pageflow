@@ -41,6 +41,35 @@ export function validateNewBooklet(rawName, rawTotalPages) {
   return { ok: true, data: { name: name.data, totalPages: total.data } };
 }
 
+// ---- コンテンツ登録（名称＋必要ページ数）----
+export const contentNameSchema = z
+  .string({ error: 'コンテンツ名を入力してください' })
+  .trim()
+  .min(1, 'コンテンツ名を入力してください')
+  .max(100, 'コンテンツ名は100文字以内で入力してください');
+
+export const requiredPagesSchema = z
+  .number({ error: '必要ページ数を数値で入力してください' })
+  .int('必要ページ数は整数で入力してください（0.5Pには対応していません）')
+  .min(1, '必要ページ数は1以上で指定してください');
+
+export function parseRequiredPagesInput(raw) {
+  const text = String(raw ?? '').trim();
+  const value = text === '' ? NaN : Number(text);
+  return requiredPagesSchema.safeParse(value);
+}
+
+// コンテンツ入力フォームの検証。項目ごとに最初のエラーメッセージを返す
+export function validateContentInput(rawName, rawRequiredPages) {
+  const errors = {};
+  const name = contentNameSchema.safeParse(rawName);
+  if (!name.success) errors.name = name.error.issues[0].message;
+  const pages = parseRequiredPagesInput(rawRequiredPages);
+  if (!pages.success) errors.requiredPages = pages.error.issues[0].message;
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  return { ok: true, data: { name: name.data, requiredPages: pages.data } };
+}
+
 // ---- IndexedDB から読み出したレコードの形式検証 ----
 const nullableId = z.string().nullable();
 

@@ -5,6 +5,7 @@ import { renderCreate, renderFixedPreview } from './ui/create.js';
 import { renderEditor } from './ui/editor.js';
 import { renderModal, renderToast } from './ui/dialog.js';
 import { validateNewBooklet } from './schemas.js';
+import { checkRange, isPlaced } from './domain/placement.js';
 
 const root = document.getElementById('app');
 
@@ -105,6 +106,31 @@ root.addEventListener('click', async (e) => {
       case 'dismiss-toast':
         store.dismissToast();
         break;
+      case 'edit-content': {
+        const c = store.getState().current.contents.find((x) => x.id === id);
+        if (c) {
+          store.setModal({ type: 'edit-content', id: c.id, name: c.name, requiredPages: String(c.requiredPages), errors: {} });
+        }
+        break;
+      }
+      case 'ask-delete-content': {
+        const { contents, pages } = store.getState().current;
+        const c = contents.find((x) => x.id === id);
+        if (c) store.setModal({ type: 'delete-content', id: c.id, name: c.name, placed: isPlaced(pages, c.id) });
+        break;
+      }
+      case 'confirm-delete-content': {
+        store.setModal(null);
+        const r = await store.deleteContentAction(id);
+        if (!r.ok) store.showToast(r.reason, 'error');
+        else store.showToast('コンテンツを削除しました。', 'success');
+        break;
+      }
+      case 'unplace-content': {
+        const r = await store.unplaceContentAction(id);
+        if (!r.ok) store.showToast(r.reason, 'error');
+        break;
+      }
     }
   } catch (err) {
     console.error(err);
@@ -132,6 +158,27 @@ root.addEventListener('submit', async (e) => {
         location.hash = `#/booklet/${encodeURIComponent(result.id)}`;
         break;
       }
+      case 'add-content': {
+        const name = String(data.get('name') ?? '');
+        const requiredPages = String(data.get('requiredPages') ?? '');
+        const r = await store.addContentAction(name, requiredPages);
+        if (!r.ok) {
+          store.setContentDraft({ name, requiredPages, errors: r.errors });
+        } else {
+          store.setContentDraft({ name: '', requiredPages: '1', errors: {} });
+        }
+        render(store.getState());
+        break;
+      }
+      case 'edit-content': {
+        const name = String(data.get('name') ?? '');
+        const requiredPages = String(data.get('requiredPages') ?? '');
+        const id = form.dataset.id;
+        const r = await store.updateContentAction(id, name, requiredPages);
+        if (!r.ok) store.setModal({ type: 'edit-content', id, name, requiredPages, errors: r.errors });
+        else store.setModal(null);
+        break;
+      }
       case 'rename': {
         const r = await store.renameBookletAction(String(data.get('name') ?? ''));
         if (!r.ok) store.showToast(r.reason, 'error');
@@ -147,6 +194,88 @@ root.addEventListener('submit', async (e) => {
   } catch (err) {
     console.error(err);
     store.showToast('操作に失敗しました。', 'error');
+  }
+});
+
+// ---- ドラッグ＆ドロップ（HTML Drag and Drop API）----
+// コンテンツ一覧／配置済みページカードをドラッグし、ページカードへドロップして配置・移動する
+let draggingContentId = null;
+let hoverCard = null;
+
+function clearHover() {
+  hoverCard?.classList.remove('ring-emerald-500', 'ring-red-500', 'ring-2');
+  hoverCard = null;
+}
+
+root.addEventListener('dragstart', (e) => {
+  const el = e.target.closest('[data-drag-content]');
+  if (!el) return;
+  draggingContentId = el.dataset.dragContent;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', draggingContentId);
+});
+
+root.addEventListener('dragover', (e) => {
+  const card = e.target.closest('[data-drop-page]');
+  if (!card || !draggingContentId) return;
+  e.preventDefault(); // ドロップを許可（可否の判定はドロップ時に行う）
+  if (card !== hoverCard) {
+    clearHover();
+    hoverCard = card;
+    // 配置できるかどうかを枠色で事前に示す（緑=可、赤=不可）
+    const st = store.getState().current;
+    const content = st.contents.find((c) => c.id === draggingContentId);
+    const ok = content && checkRange(st, content, Number(card.dataset.dropPage)).ok;
+    card.classList.add('ring-2', ok ? 'ring-emerald-500' : 'ring-red-500');
+  }
+});
+
+root.addEventListener('dragleave', (e) => {
+  if (hoverCard && !hoverCard.contains(e.relatedTarget)) clearHover();
+});
+
+root.addEventListener('dragend', () => {
+  draggingContentId = null;
+  clearHover();
+});
+
+root.addEventListener('drop', async (e) => {
+  const card = e.target.closest('[data-drop-page]');
+  if (!card || !draggingContentId) return;
+  e.preventDefault();
+  const contentId = draggingContentId;
+  draggingContentId = null;
+  clearHover();
+  try {
+    const r = await store.placeContentAction(contentId, Number(card.dataset.dropPage));
+    // 拒否時は何も変更せず（元の配置を維持して）警告を出す
+    if (!r.ok) store.showToast(r.reason, 'error');
+  } catch (err) {
+    console.error(err);
+    store.showToast('操作に失敗しました。', 'error');
+  }
+});
+
+// キーボードでもページカードを選択できるようにする
+root.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const card = e.target.closest('[data-action="select-page"]');
+  if (!card || card !== e.target) return;
+  e.preventDefault();
+  store.selectPage(Number(card.dataset.no));
+});
+
+// ---- コンテンツ追加フォームの入力中：値を保持（再描画で消えないように） ----
+root.addEventListener('input', (e) => {
+  const addForm = e.target.closest('form[data-form="add-content"]');
+  if (addForm) {
+    const d = new FormData(addForm);
+    store.setContentDraft({
+      name: String(d.get('name') ?? ''),
+      requiredPages: String(d.get('requiredPages') ?? ''),
+      errors: store.getState().contentDraft.errors,
+    });
+    return;
   }
 });
 

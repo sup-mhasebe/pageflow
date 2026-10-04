@@ -1,5 +1,6 @@
 import { esc, btnSecondary } from './util.js';
 import { usage } from '../domain/booklet.js';
+import { capacity } from '../domain/content.js';
 import { renderCompose, renderComingSoon } from './compose.js';
 
 const TABS = [
@@ -17,7 +18,11 @@ const SAVE_LABEL = {
 export function renderEditor(state) {
   const { booklet, contents, pages } = state.current;
   const u = usage(booklet.totalPages, contents, pages);
-  const over = u.empty < 0 ? '<span class="ml-2 text-red-600">（容量超過）</span>' : '';
+  const cap = capacity(state.current);
+  const warn = cap.over
+    ? `<p class="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800" role="alert">
+        容量超過：登録コンテンツの合計が${cap.registered}Pで、固定ページを除く配置可能ページ数（${cap.available}P）を超えています。</p>`
+    : '';
 
   const tabs = TABS.map((t) => {
     const active = state.tab === t.key;
@@ -42,8 +47,9 @@ export function renderEditor(state) {
           <span class="text-sm" aria-live="polite">${SAVE_LABEL[state.saveStatus]}</span>
         </div>
         <p class="text-sm text-slate-600">
-          全${u.total}P｜固定${u.fixed}P｜コンテンツ${u.content}P｜空き${u.empty}P${over}
+          全${u.total}P｜固定${u.fixed}P｜コンテンツ${u.content}P｜空き${u.empty}P
         </p>
+        ${warn}
         <nav class="flex border-b border-slate-200" aria-label="編集タブ">${tabs}</nav>
       </header>
       ${body}
