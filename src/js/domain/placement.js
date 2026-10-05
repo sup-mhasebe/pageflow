@@ -1,7 +1,6 @@
 // コンテンツ配置の純粋関数。入力を書き換えず、新しい配列を返す。
 // 原則：連続空きが確保できない場合は拒否し、既存の配置を勝手に動かさない・上書きしない。
-// PDFはコンテンツ単位で登録されており、冊子ページとの対応は配置位置から導出し直す（relinkPages）。
-import { relinkPages } from './pdf.js';
+// PDFの割り当て（Page.renderImageId）はユーザーが決めたもの。配置を動かしても、並び順から再計算はしない。
 
 const pageMap = (pages) => new Map(pages.map((p) => [p.physicalPageNumber, p]));
 
@@ -53,17 +52,20 @@ export function placeContent(state, contentId, startNo) {
   if (currentStart === startNo) return { ok: true, pages: state.pages, unchanged: true };
 
   const end = startNo + content.requiredPages - 1;
-  const pages = state.pages.map((p) => {
-    if (p.contentId === contentId) return { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null };
-    return p;
-  });
-  const next = pages.map((p) =>
-    p.physicalPageNumber >= startNo && p.physicalPageNumber <= end
-      ? { ...p, contentId, contentPageIndex: p.physicalPageNumber - startNo }
-      : p,
+  // 移動：コンテンツ内の何ページ目か（contentPageIndex）ごとに、割り当て済みの素材を新しい位置へ引き継ぐ
+  const carried = new Map();
+  for (const p of state.pages) {
+    if (p.contentId === contentId && p.renderImageId) carried.set(p.contentPageIndex, { pdfAssetId: p.pdfAssetId, renderImageId: p.renderImageId });
+  }
+  const cleared = state.pages.map((p) =>
+    p.contentId === contentId ? { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null } : p,
   );
-  // 登録済みPDFはコンテンツに付随して移動する（新しい配置位置へ対応付け直す）
-  return { ok: true, pages: relinkPages({ ...state, pages: next }), moved: currentStart !== null };
+  const pages = cleared.map((p) => {
+    if (p.physicalPageNumber < startNo || p.physicalPageNumber > end) return p;
+    const index = p.physicalPageNumber - startNo;
+    return { ...p, contentId, contentPageIndex: index, ...(carried.get(index) ?? {}) };
+  });
+  return { ok: true, pages, moved: currentStart !== null };
 }
 
 // 配置解除：コンテンツが占有する全ページを解除する（コンテンツ自体は残す）
@@ -71,7 +73,7 @@ export function unplaceContent(state, contentId) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, reason: 'コンテンツが見つかりません。' };
   if (!isPlaced(state.pages, contentId)) return { ok: false, reason: 'このコンテンツは配置されていません。' };
-  // 配置解除：冊子ページとの対応のみ外す。登録済みPDF（PdfAsset）はコンテンツに残る
+  // 配置解除：ページ配置とそのページへの割り当てだけを外す。Content・PdfAsset・RenderImage は残る
   const pages = state.pages.map((p) =>
     p.contentId === contentId
       ? { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null }

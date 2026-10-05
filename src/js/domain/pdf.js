@@ -1,6 +1,7 @@
-// PDF登録に関する純粋関数（PDF.js / Canvas / IndexedDB には依存しない）。
-// - ページサイズ判定、ページ数の照合、冊子ページへの割り当て（RenderImageとの対応付け）
-// - PDFを暗黙的に削除・移動しない：差し替え／解除では必ず呼び出し側が選んだ mode（trash | delete）に従う
+// PDF素材に関する純粋関数（PDF.js / Canvas / IndexedDB には依存しない）。
+// - ページサイズ判定、PDF素材（PdfAsset／RenderImage）の登録・削除の組み立て
+// - 登録しても冊子ページへは自動で割り当てない（割り当ては assignment.js で、ユーザーが明示的に行う）
+// - PDFを暗黙的に削除・移動しない：差し替え／削除では必ず呼び出し側が選んだ mode（trash | delete）に従う
 
 // ISO 216 のサイズ（pt）。A4縦 = 210x297mm、A3横 = 420x297mm
 export const A4_PT = { width: 595.28, height: 841.89 };
@@ -21,20 +22,6 @@ export function convertedPageCount(kinds) {
   return kinds.reduce((sum, k) => sum + (k === 'a3' ? 2 : 1), 0);
 }
 
-// 変換後ページ数と必要ページ数の照合
-//  - 同数：登録可
-//  - 不足：登録可（不足分は「PDF未登録」のまま）
-//  - 超過：登録不可（必要ページ数は自動変更しない・追加ページへも配置しない）
-export function checkPageCount(converted, required) {
-  if (converted > required) {
-    return {
-      ok: false,
-      reason: `PDFの変換後ページ数（${converted}ページ）がコンテンツの必要ページ数（${required}ページ）を超えているため登録できません。必要ページ数は自動では変更されません。`,
-    };
-  }
-  return { ok: true, shortage: required - converted };
-}
-
 // 変換後の並び順：元PDFのページ順、A3は 左 → 右
 const SIDE_ORDER = { none: 0, left: 0, right: 1 };
 export function orderedImages(renderImages, pdfAssetId) {
@@ -43,28 +30,27 @@ export function orderedImages(renderImages, pdfAssetId) {
     .sort((a, b) => a.sourcePdfPage - b.sourcePdfPage || SIDE_ORDER[a.splitSide] - SIDE_ORDER[b.splitSide]);
 }
 
-// 冊子ページの pdfAssetId / renderImageId を「コンテンツの配置位置」と「PDFの生成画像」から導出し直す。
-// コンテンツのN番目のページ(contentPageIndex)に、そのPDFのN番目の画像を対応付ける。
-export function relinkPages(state) {
-  const assets = state.pdfAssets ?? [];
-  const images = state.renderImages ?? [];
-  const imagesByContent = new Map();
-  for (const a of assets) imagesByContent.set(a.contentId, { asset: a, images: orderedImages(images, a.id) });
-  return state.pages.map((p) => {
-    const entry = p.contentId ? imagesByContent.get(p.contentId) : null;
-    const img = entry ? entry.images[p.contentPageIndex] : null;
-    const pdfAssetId = img ? entry.asset.id : null;
-    const renderImageId = img ? img.id : null;
-    if (p.pdfAssetId === pdfAssetId && p.renderImageId === renderImageId) return p;
-    return { ...p, pdfAssetId, renderImageId };
-  });
-}
-
 export function assetOfContent(state, contentId) {
   return (state.pdfAssets ?? []).find((a) => a.contentId === contentId) ?? null;
 }
 
 export const hasPdfRef = (page) => !!(page.pdfAssetId || page.renderImageId);
+
+// そのページの割り当てが、指定したPDFの素材かどうか（pdfAssetId、または素材のIDで判定する）
+const usesAsset = (p, assetId, imageIds) => p.pdfAssetId === assetId || (p.renderImageId && imageIds.has(p.renderImageId));
+const imageIdsOf = (renderImages, assetId) => new Set(renderImages.filter((i) => i.pdfAssetId === assetId).map((i) => i.id));
+
+// 指定したPDFの割り当てだけを、冊子ページから外す（PDF素材・コンテンツ・配置は変えない）
+export function clearAssetRefs(state, assetId) {
+  const ids = imageIdsOf(state.renderImages ?? [], assetId);
+  return state.pages.map((p) => (usesAsset(p, assetId, ids) ? { ...p, pdfAssetId: null, renderImageId: null } : p));
+}
+
+// 指定したPDFの素材が割り当てられているページ数
+export function assignedCount(state, assetId) {
+  const ids = imageIdsOf(state.renderImages ?? [], assetId);
+  return state.pages.filter((p) => p.renderImageId && usesAsset(p, assetId, ids)).length;
+}
 
 const newId = () => crypto.randomUUID();
 const MODES = ['trash', 'delete'];
@@ -79,14 +65,12 @@ function disposal(existing, mode) {
 
 // PDF登録（新規／差し替え）の結果を組み立てる。
 // converted: [{ sourcePdfPage, splitSide, imageBlob, width, height }]（変換後ページ順）
+//  - 1コンテンツにつきPDFは1つ。素材の数と必要ページ数は一致していなくてよい
+//  - 登録しても冊子ページへは割り当てない。差し替えでは旧PDFの割り当てをすべて解除する
 export function buildRegistration(state, contentId, { fileName, pdfBlob, converted, replaceMode }, now = new Date()) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, reason: 'コンテンツが見つかりません。' };
-  if (!state.pages.some((p) => p.contentId === contentId)) {
-    return { ok: false, reason: 'PDFを登録するには、先にコンテンツをページへ配置してください。' };
-  }
-  const check = checkPageCount(converted.length, content.requiredPages);
-  if (!check.ok) return check;
+  if (!Array.isArray(converted) || converted.length === 0) return { ok: false, reason: '登録できるページがありません。' };
 
   const existing = assetOfContent(state, contentId);
   if (existing && !MODES.includes(replaceMode)) {
@@ -116,11 +100,13 @@ export function buildRegistration(state, contentId, { fileName, pdfBlob, convert
 
   const pdfAssets = [...state.pdfAssets.filter((a) => a.id !== existing?.id), asset];
   const renderImages = [...state.renderImages.filter((i) => i.pdfAssetId !== existing?.id), ...imageMetas];
-  const pages = relinkPages({ ...state, pdfAssets, renderImages });
+  const releasedPages = existing ? assignedCount(state, existing.id) : 0;
+  const pages = existing ? clearAssetRefs(state, existing.id) : state.pages;
 
   return {
     ok: true,
-    shortage: check.shortage,
+    materialCount: imageMetas.length,
+    releasedPages,
     pdfAssets,
     renderImages,
     pages,
@@ -133,7 +119,7 @@ export function buildRegistration(state, contentId, { fileName, pdfBlob, convert
   };
 }
 
-// PDF登録解除：PDFとの関連だけ外す。Content と冊子ページへの配置は残す
+// PDF削除：PdfAsset・そのRenderImage・それらの割り当てを外す。Content と冊子ページへの配置は残す
 export function buildUnregister(state, contentId, mode) {
   const existing = assetOfContent(state, contentId);
   if (!existing) return { ok: false, reason: 'このコンテンツにはPDFが登録されていません。' };
@@ -141,9 +127,7 @@ export function buildUnregister(state, contentId, mode) {
   const removedImageIds = state.renderImages.filter((i) => i.pdfAssetId === existing.id).map((i) => i.id);
   const pdfAssets = state.pdfAssets.filter((a) => a.id !== existing.id);
   const renderImages = state.renderImages.filter((i) => i.pdfAssetId !== existing.id);
-  const pages = relinkPages({ ...state, pdfAssets, renderImages });
-  return { ok: true, pdfAssets, renderImages, pages, removedImageIds, ...disposal(existing, mode) };
+  const releasedPages = assignedCount(state, existing.id);
+  const pages = clearAssetRefs(state, existing.id);
+  return { ok: true, releasedPages, pdfAssets, renderImages, pages, removedImageIds, ...disposal(existing, mode) };
 }
-
-export const PDF_IN_USE_MESSAGE =
-  'PDFが登録されているページが含まれるためページ数を変更できません。先にPDF登録を解除してください。';

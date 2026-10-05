@@ -13,7 +13,8 @@ import { createBooklet, planResize, resizeBooklet } from './domain/booklet.js';
 import { normalizeContent, presetStatus, applyPreset } from './domain/preset.js';
 import { addContent, updateContent, deleteContent, sortContents } from './domain/content.js';
 import { placeContent, unplaceContent, startPageOf } from './domain/placement.js';
-import { assetOfContent, buildRegistration, buildUnregister, checkPageCount, convertedPageCount } from './domain/pdf.js';
+import { assetOfContent, assignedCount, buildRegistration, buildUnregister, convertedPageCount } from './domain/pdf.js';
+import { assignImage, assignSequentially, planSequentialAssign, repairAssignments, resolveMaterialContentId, unassignPage } from './domain/assignment.js';
 import * as pdf from './pdf.js';
 import { classifyPdfError, describeError } from './domain/pdf-errors.js';
 import { clearImages, removeImages, setImage } from './images.js';
@@ -27,6 +28,8 @@ const state = {
   invalidCount: 0, // 形式不正で読み込めなかった保存データの件数（削除はしない）
   current: null, // { booklet, contents, pages, pdfAssets, renderImages }（Blob本体は含めない）
   selectedPageNo: null,
+  materialContentId: null, // 右カラム（PDF素材）の対象コンテンツ。画面上の一時状態で、保存しない
+  materialMenuOpen: false, // 右カラムの［︙］メニュー
   tab: 'compose',
   saveStatus: 'saved', // saving | saved | error
   modal: null,
@@ -113,6 +116,7 @@ export function showToast(message, type = 'info') {
 }
 
 export function dismissToast() {
+  clearTimeout(toastTimer); // 手動で閉じたあとに、古いタイマーが再描画を起こさないようにする
   state.toast = null;
   notify();
 }
@@ -160,13 +164,20 @@ function parseBookletSet(raw, pdfRaw) {
   }
   // 旧バージョンの固定ページ（isFixed）は通常コンテンツとして扱う（保存済みデータは壊さず、次の保存時に更新される）。
   // IndexedDB はキー順で返すため、表示順（配置済みは開始ページ順、未配置は作成順）に並べ直す
-  const pageList = pages.map((r) => r.data);
+  const contentList = contents.map((r) => normalizeContent(r.data));
+  const rawPages = pages.map((r) => r.data);
+  const pdfAssets = assets.map((r) => r.data);
+  const renderImages = images.map((r) => r.data);
+  // 割り当て（Page.renderImageId）はユーザーが決めたものとしてそのまま使う。
+  // 整合しない割り当て（別コンテンツの素材・重複・コンテンツなしのページ）だけを外し、並び替えや再計算はしない
+  const fixed = repairAssignments({ contents: contentList, pages: rawPages, pdfAssets, renderImages });
+  if (fixed.removed > 0) console.warn(`[PageFlow] 整合しない割り当てを${fixed.removed}件解除しました。`);
   return {
     booklet: booklet.data,
-    contents: sortContents(contents.map((r) => normalizeContent(r.data)), pageList),
-    pages: pageList,
-    pdfAssets: assets.map((r) => r.data),
-    renderImages: images.map((r) => r.data),
+    contents: sortContents(contentList, fixed.pages),
+    pages: fixed.pages,
+    pdfAssets,
+    renderImages,
   };
 }
 
@@ -199,6 +210,8 @@ export async function openBooklet(id) {
   for (const img of pdfRaw.images) setImage(img.id, img.imageBlob);
   state.current = set;
   state.selectedPageNo = null;
+  state.materialContentId = null;
+  state.materialMenuOpen = false;
   state.tab = 'compose';
   state.viewer = { pageNo: 1, showInfo: state.viewer.showInfo, anim: null };
   state.saveStatus = 'saved';
@@ -227,8 +240,26 @@ export function setTab(tab) {
   notify();
 }
 
+// ページを選択する。コンテンツが配置されたページなら、右カラム（PDF素材）の対象もそのコンテンツへ切り替える
 export function selectPage(no) {
   state.selectedPageNo = no;
+  const page = state.current?.pages.find((p) => p.physicalPageNumber === no);
+  if (page?.contentId) state.materialContentId = page.contentId;
+  state.materialMenuOpen = false;
+  notify();
+}
+
+// 右カラムの対象コンテンツをドロップダウンで切り替える
+export function setMaterialContent(contentId) {
+  state.materialContentId = contentId || null;
+  state.materialMenuOpen = false;
+  notify();
+}
+
+export function toggleMaterialMenu(open) {
+  const next = open ?? !state.materialMenuOpen;
+  if (state.materialMenuOpen === next) return;
+  state.materialMenuOpen = next;
   notify();
 }
 
@@ -293,6 +324,11 @@ async function commitCurrent({
   removedImageIds = [],
 }) {
   const cur = state.current;
+  // 右カラムの対象が「先頭のコンテンツ」などの暗黙の指定のときは、変更前の対象に固定する
+  // （配置の変更で並び順が変わっても、操作中のコンテンツから対象が勝手に切り替わらないようにする）
+  if (!state.materialContentId) {
+    state.materialContentId = resolveMaterialContentId(cur.contents, cur.pages, state.selectedPageNo, null);
+  }
   const booklet = { ...cur.booklet, updatedAt: new Date().toISOString() };
   await persist({
     booklet,
@@ -401,9 +437,41 @@ export async function unplaceContentAction(contentId) {
   const cur = state.current;
   const r = unplaceContent(cur, contentId);
   if (!r.ok) return r;
+  state.materialContentId = contentId; // 配置を解除しても、素材は右カラムで引き続き確認できる
   await commitCurrent({ contents: cur.contents, pages: r.pages });
   return r;
 }
+
+// ---- PDF素材の割り当て（ユーザーが明示的に行う）----
+// 素材を指定ページへ割り当てる（別ページ割り当て済みなら移動、割り当て済みページなら確認なしで置き換え）
+export async function assignImageAction(imageId, pageNo) {
+  const cur = state.current;
+  const r = assignImage(cur, imageId, pageNo);
+  if (!r.ok || r.unchanged) return r;
+  await commitCurrent({ contents: cur.contents, pages: r.pages });
+  return r;
+}
+
+// ページの割り当てだけを解除する（素材・PDF・コンテンツ・配置は残す）
+export async function unassignPageAction(pageNo) {
+  const cur = state.current;
+  const r = unassignPage(cur, pageNo);
+  if (!r.ok) return r;
+  await commitCurrent({ contents: cur.contents, pages: r.pages });
+  return r;
+}
+
+// ［PDFを順番に割り当て］：ユーザーがボタンを押したときだけ行う
+export async function assignSequentialAction(contentId) {
+  const cur = state.current;
+  const r = assignSequentially(cur, contentId);
+  if (!r.ok) return r;
+  await commitCurrent({ contents: cur.contents, pages: r.pages });
+  showToast(`${r.count}ページを割り当てました`, 'success');
+  return r;
+}
+
+export const sequentialPlan = (contentId) => planSequentialAssign(state.current, contentId);
 
 export async function deleteBookletAction(id) {
   await db.deleteBookletCascade(id);
@@ -454,8 +522,8 @@ export async function startPdfImport(contentId, file) {
   const cur = state.current;
   const content = cur.contents.find((c) => c.id === contentId);
   const start = content ? startPageOf(cur.pages, contentId) : null;
-  if (!content || start === null) {
-    showToast('PDFを登録するには、先にコンテンツをページへ配置してください。', 'error');
+  if (!content) {
+    showToast('PDFを登録するコンテンツが見つかりません。', 'error');
     return;
   }
   disposeImportSession();
@@ -471,6 +539,7 @@ export async function startPdfImport(contentId, file) {
     required: content.requiredPages,
     start,
     existingFileName: existing?.originalFileName ?? null,
+    existingAssigned: existing ? assignedCount(cur, existing.id) : 0, // 差し替えで解除される割り当てページ数
     replaceMode: null,
   };
   notify();
@@ -489,7 +558,6 @@ export async function startPdfImport(contentId, file) {
     const items = await pdf.analyzePdf(handle.doc);
     const unsupported = items.filter((i) => !i.kind);
     const converted = convertedPageCount(items.filter((i) => i.kind).map((i) => i.kind));
-    const count = unsupported.length === 0 ? checkPageCount(converted, content.requiredPages) : null;
 
     // A3横ページの分割確認用プレビュー（A3全体の画像）。多数ある場合は先頭8ページ分のみ
     const previews = {};
@@ -538,9 +606,7 @@ export async function startPdfImport(contentId, file) {
       converted,
       previews,
       fallbacks,
-      canRegister: !!count?.ok,
-      countError: count && !count.ok ? count.reason : null,
-      shortage: count?.ok ? count.shortage : 0,
+      canRegister: unsupported.length === 0 && items.length > 0,
     });
   } catch (e) {
     if (handle && !isCurrentSession(token)) await pdf.closePdf(handle); // キャンセル後の例外でも、確実に解放する
@@ -593,24 +659,22 @@ export async function confirmPdfImport() {
       removedImageIds: r.removedImageIds,
     });
     setModal(null); // 取り込みセッションを解放する
-    showToast(
-      r.shortage > 0
-        ? `PDFを登録しました（不足の${r.shortage}ページは「PDF未登録」のままです）。`
-        : 'PDFを登録しました。',
-      'success',
-    );
+    // 登録しても自動では割り当てない。右カラムから割り当てる
+    const released = r.releasedPages > 0 ? `旧PDFの${r.releasedPages}ページ分の割り当てを解除しました。` : '';
+    showToast(`PDFを登録しました（素材${r.materialCount}ページ）。${released}右カラムから、ページへ割り当ててください。`, 'success');
   } catch (e) {
     failImport(token, e, stage);
   }
 }
 
-// PDF登録解除（コンテンツと配置は残し、PDFとの関連だけ外す）。元PDFの扱いはユーザーが選択する
+// PDF削除（PdfAsset・素材・割り当てを外す。コンテンツと配置は残す）。元PDFの扱いはユーザーが選択する
 export function askUnregisterPdf(contentId) {
   const cur = state.current;
   const asset = assetOfContent(cur, contentId);
   const content = cur.contents.find((c) => c.id === contentId);
   if (!asset || !content) return;
-  setModal({ type: 'unregister-pdf', contentId, contentName: content.name, fileName: asset.originalFileName, mode: null });
+  state.materialMenuOpen = false;
+  setModal({ type: 'unregister-pdf', contentId, contentName: content.name, fileName: asset.originalFileName, assigned: assignedCount(cur, asset.id), mode: null });
 }
 
 export async function confirmUnregisterPdf() {
@@ -632,7 +696,7 @@ export async function confirmUnregisterPdf() {
     removedImageIds: r.removedImageIds,
   });
   setModal(null);
-  showToast(m.mode === 'trash' ? 'PDF登録を解除しました（元PDFはゴミ箱へ移動）。' : 'PDF登録を解除しました（元PDFは完全削除）。', 'success');
+  showToast(m.mode === 'trash' ? 'PDFを削除しました（元PDFはゴミ箱へ移動）。' : 'PDFを削除しました（元PDFは完全削除）。', 'success');
 }
 
 // ---------------------------------------------------------------------------

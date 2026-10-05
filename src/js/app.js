@@ -7,6 +7,7 @@ import { renderImportedViewer } from './ui/imported-viewer.js';
 import { renderModal, renderToast } from './ui/dialog.js';
 import { validateNewBooklet } from './schemas.js';
 import { checkRange, isPlaced } from './domain/placement.js';
+import { checkAssign } from './domain/assignment.js';
 import { captureViewState, restoreViewState } from './ui/view-state.js';
 
 const root = document.getElementById('app');
@@ -15,7 +16,23 @@ const root = document.getElementById('app');
 let createForm = { name: '', totalPages: '8', preset: true, errors: {} };
 
 // ---- 描画 ----
+// ドラッグ中に画面を作り直すと、ドラッグ元の要素が消えてドラッグが中断される（トーストの自動消去・保存完了の通知など）。
+// そのため、ドラッグ中の再描画は保留し、ドラッグが終わってから1回だけ行う。
+let draggingContentId = null; // コンテンツ（左カラム／配置済みページ）をドラッグ中
+let draggingImageId = null; // 右カラムのPDF素材をドラッグ中
+let renderDeferred = false;
+const isDragging = () => !!(draggingContentId || draggingImageId);
+function flushRender() {
+  if (!renderDeferred) return;
+  renderDeferred = false;
+  render(store.getState());
+}
+
 function render(state) {
+  if (isDragging()) {
+    renderDeferred = true;
+    return;
+  }
   let body = '';
   if (state.route.name === 'home') body = renderHome(state);
   else if (state.route.name === 'new') body = renderCreate(createForm);
@@ -241,6 +258,19 @@ root.addEventListener('click', async (e) => {
         if (!r.ok) store.showToast(r.reason, 'error');
         break;
       }
+      case 'toggle-material-menu':
+        store.toggleMaterialMenu();
+        break;
+      case 'assign-sequential': {
+        const r = await store.assignSequentialAction(id);
+        if (!r.ok) store.showToast(r.reason, 'error');
+        break;
+      }
+      case 'unassign-page': {
+        const r = await store.unassignPageAction(Number(no));
+        if (!r.ok) store.showToast(r.reason, 'error');
+        break;
+      }
     }
   } catch (err) {
     console.error(err);
@@ -376,6 +406,17 @@ root.addEventListener('change', async (e) => {
   if (ok) location.hash = '#/view'; // 編集画面を経由せず、ビューアを直接開く
 });
 
+// ---- 右カラム（PDF素材）の対象コンテンツの切り替え ----
+root.addEventListener('change', (e) => {
+  const sel = e.target.closest('select[data-material-select]');
+  if (sel) store.setMaterialContent(sel.value);
+});
+
+// ［︙］メニューは、メニューの外をクリックしたら閉じる
+document.addEventListener('click', (e) => {
+  if (store.getState().materialMenuOpen && !e.target.closest('[data-material-menu]')) store.toggleMaterialMenu(false);
+});
+
 // ---- 標準構成ポップアップのチェックボックス ----
 root.addEventListener('change', (e) => {
   const box = e.target.closest('input[data-preset-key]');
@@ -391,6 +432,7 @@ root.addEventListener('change', async (e) => {
   input.value = ''; // 同じファイルを再選択できるようにする
   if (!file) return;
   try {
+    store.toggleMaterialMenu(false);
     await store.startPdfImport(contentId, file);
   } catch (err) {
     console.error(err);
@@ -400,7 +442,6 @@ root.addEventListener('change', async (e) => {
 
 // ---- ドラッグ＆ドロップ（HTML Drag and Drop API）----
 // コンテンツ一覧／配置済みページカードをドラッグし、ページカードへドロップして配置・移動する
-let draggingContentId = null;
 let hoverCard = null;
 
 function clearHover() {
@@ -409,6 +450,14 @@ function clearHover() {
 }
 
 root.addEventListener('dragstart', (e) => {
+  const mat = e.target.closest('[data-drag-image]');
+  if (mat) {
+    draggingImageId = mat.dataset.dragImage;
+    draggingContentId = null;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', draggingImageId);
+    return;
+  }
   const el = e.target.closest('[data-drag-content]');
   if (!el) return;
   draggingContentId = el.dataset.dragContent;
@@ -418,15 +467,20 @@ root.addEventListener('dragstart', (e) => {
 
 root.addEventListener('dragover', (e) => {
   const card = e.target.closest('[data-drop-page]');
-  if (!card || !draggingContentId) return;
+  if (!card || (!draggingContentId && !draggingImageId)) return;
   e.preventDefault(); // ドロップを許可（可否の判定はドロップ時に行う）
   if (card !== hoverCard) {
     clearHover();
     hoverCard = card;
-    // 配置できるかどうかを枠色で事前に示す（緑=可、赤=不可）
+    // 配置・割り当てできるかどうかを枠色で事前に示す（緑=可、赤=不可）
     const st = store.getState().current;
-    const content = st.contents.find((c) => c.id === draggingContentId);
-    const ok = content && checkRange(st, content, Number(card.dataset.dropPage)).ok;
+    let ok;
+    if (draggingImageId) {
+      ok = checkAssign(st, draggingImageId, Number(card.dataset.dropPage)).ok;
+    } else {
+      const content = st.contents.find((c) => c.id === draggingContentId);
+      ok = content && checkRange(st, content, Number(card.dataset.dropPage)).ok;
+    }
     card.classList.add('ring-2', ok ? 'ring-emerald-500' : 'ring-red-500');
   }
 });
@@ -437,17 +491,28 @@ root.addEventListener('dragleave', (e) => {
 
 root.addEventListener('dragend', () => {
   draggingContentId = null;
+  draggingImageId = null;
   clearHover();
+  flushRender();
 });
 
 root.addEventListener('drop', async (e) => {
   const card = e.target.closest('[data-drop-page]');
-  if (!card || !draggingContentId) return;
+  if (!card || (!draggingContentId && !draggingImageId)) return;
   e.preventDefault();
   const contentId = draggingContentId;
+  const imageId = draggingImageId;
   draggingContentId = null;
+  draggingImageId = null;
   clearHover();
+  flushRender();
   try {
+    if (imageId) {
+      // PDF素材の割り当て。拒否時は何も変更せず、理由を警告する
+      const r = await store.assignImageAction(imageId, Number(card.dataset.dropPage));
+      if (!r.ok) store.showToast(r.reason, 'error');
+      return;
+    }
     const r = await store.placeContentAction(contentId, Number(card.dataset.dropPage));
     // 拒否時は何も変更せず（元の配置を維持して）警告を出す
     if (!r.ok) store.showToast(r.reason, 'error');

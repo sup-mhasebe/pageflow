@@ -13,6 +13,7 @@ import { createBooklet } from '../src/js/domain/booklet.js';
 import { addContent } from '../src/js/domain/content.js';
 import { placeContent } from '../src/js/domain/placement.js';
 import { buildRegistration } from '../src/js/domain/pdf.js';
+import { assignSequentially } from '../src/js/domain/assignment.js';
 import { buildViewerModel, buildViewerModelFromManifest, renderViewer } from '../src/js/ui/viewer.js';
 import { setImage, clearImages } from '../src/js/images.js';
 
@@ -38,6 +39,8 @@ function setup() {
     const r = buildRegistration(state, contentId, { fileName: 'secret-original.pdf', pdfBlob: new Blob(['%PDF-secret']), converted });
     assert.equal(r.ok, true);
     state = { ...state, pages: r.pages, pdfAssets: r.pdfAssets, renderImages: r.renderImages };
+    // 登録しても自動では割り当てないため、ユーザーが［PDFを順番に割り当て］を押した状態にする
+    state = { ...state, pages: assignSequentially(state, contentId).pages };
     r.put.renderImages.forEach((img, i) => images.set(img.id, { bytes: WEBP(`${contentId.slice(0, 4)}${i}`), type: 'image/webp' }));
   };
   reg(state.contents.find((c) => c.name === '表紙').id, 1);

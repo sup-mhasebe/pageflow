@@ -1,7 +1,8 @@
 import { esc, btnSecondary, btnDanger, btnPrimary, inputCls, circled } from './util.js';
-import { placementPages, placementLabel, pdfSummary, pdfSummaryLabel } from '../domain/content-info.js';
+import { placementPages, placementLabel, pdfSummary, pdfSummaryLabel, materialCountLabel } from '../domain/content-info.js';
 import { presetStatus } from '../domain/preset.js';
-import { startPageOf } from '../domain/placement.js';
+import { assetOfContent } from '../domain/pdf.js';
+import { assignmentMap, materialName, materialsOf, pageState, planSequentialAssign, resolveMaterialContentId } from '../domain/assignment.js';
 import { getImageUrl } from '../images.js';
 import { formatDateTime } from './util.js';
 
@@ -13,19 +14,12 @@ const pdfPicker = (contentId, label) =>
     <input type="file" accept="application/pdf,.pdf" class="sr-only" data-pdf-input data-content-id="${esc(contentId)}" />
   </label>`;
 
-// 配置範囲の表示（例：P4–P5）
-function rangeLabel(pages, content) {
-  const start = startPageOf(pages, content.id);
-  if (start === null) return null;
-  return content.requiredPages === 1 ? `P${start}` : `P${start}–P${start + content.requiredPages - 1}`;
-}
-
 // 標準構成をセットできる項目が残っているか（すべて標準位置に配置済みなら、ボタンは使えない）
 function presetAllDone(state) {
   return presetStatus(state).every((x) => x.status === 'placed-standard');
 }
 
-// 左カラム：コンテンツ管理（冊子に何を載せるか）。PDFのサムネイルは表示しない
+// 左カラム：コンテンツ管理（冊子の構造）。PDFのサムネイルは表示せず、割り当て状況だけを示す
 function renderContentList(cur, draft) {
   const { contents, pages, pdfAssets } = cur;
   const done = presetAllDone(cur);
@@ -36,25 +30,24 @@ function renderContentList(cur, draft) {
       const status = placed
         ? `<span class="text-indigo-700">配置：${esc(placementLabel(nums))}</span>`
         : '<span class="text-slate-500">配置：未配置（ドラッグして配置）</span>';
-      const summary = pdfSummary(c, pages, pdfAssets);
-      // 未配置のコンテンツにPDFが残っている場合は、ここからPDF登録を解除できる（PDF素材の管理は後続の段階で作り替える）
-      const unreg =
-        summary.hasPdf && !placed
-          ? `<button type="button" class="${btnSecondary} !px-2 !py-1 !text-xs" data-action="ask-unregister-pdf" data-id="${esc(c.id)}">PDF登録を解除</button>`
-          : '';
+      const summary = pdfSummary(c, pages, pdfAssets, cur.renderImages);
+      const extra = materialCountLabel(summary);
+      // 配置の解除（コンテンツ・PDF素材は残り、ページ配置とそのページへの割り当てだけが外れる）
+      const unplace = placed
+        ? `<button type="button" class="${btnSecondary} !px-2 !py-1 !text-xs" data-action="unplace-content" data-id="${esc(c.id)}">配置を解除</button>`
+        : '';
       return `<li class="rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm" draggable="true" data-drag-content="${esc(c.id)}" data-content-card="${esc(c.id)}">
         <div class="flex items-start justify-between gap-2">
           <span class="min-w-0 cursor-grab font-medium [overflow-wrap:anywhere]">${esc(c.name)}</span>
           <span class="shrink-0 text-xs text-slate-600" data-required-pages>${c.requiredPages}P</span>
         </div>
         <div class="mt-1 text-xs" data-placement>${status}</div>
-        <div class="text-xs text-slate-600" data-pdf-summary>${esc(pdfSummaryLabel(summary))}</div>
+        <div class="text-xs text-slate-600" data-pdf-summary>${esc(pdfSummaryLabel(summary))}${extra ? `<span class="ml-2 text-slate-500" data-material-count>${esc(extra)}</span>` : ''}</div>
         <div class="mt-2 flex flex-wrap items-center gap-1.5">
           <button type="button" class="${btnSecondary} !px-2 !py-1 !text-xs" data-action="edit-content" data-id="${esc(c.id)}">編集</button>
-          ${pdfPicker(c.id, 'PDF登録').replace(btnSecondary, `${btnSecondary} !px-2 !py-1 !text-xs`)}
           <button type="button" class="${btnDanger} !px-2 !py-1 !text-xs" data-action="ask-delete-content" data-id="${esc(c.id)}">削除</button>
           <button type="button" class="${btnSecondary} !px-2 !py-1 !text-xs" data-action="show-content-pdf" data-id="${esc(c.id)}" aria-haspopup="dialog" aria-label="${esc(c.name)}のPDF配置情報" title="PDF配置情報">…</button>
-          ${unreg}
+          ${unplace}
         </div>
       </li>`;
     })
@@ -86,8 +79,12 @@ function renderContentList(cur, draft) {
     </section>`;
 }
 
-// 中央カラム：P1〜PNのページカード（ドロップ先）
-function renderPageCards({ contents, pages }, selectedNo) {
+// 中央カラム：P1〜PNのページカード（素材の割り当て先・コンテンツの配置先）
+// 表示は4状態：空き／PDF未登録／素材あり・未割り当て／画像
+const STATE_TEXT = { empty: '', 'no-pdf': 'PDF未登録', unassigned: '素材あり・未割り当て' };
+
+function renderPageCards(cur, selectedNo) {
+  const { contents, pages } = cur;
   const byId = new Map(contents.map((c) => [c.id, c]));
   const cards = pages
     .map((p) => {
@@ -96,77 +93,110 @@ function renderPageCards({ contents, pages }, selectedNo) {
       const ring = selected ? 'ring-2 ring-indigo-500' : 'ring-1 ring-slate-200';
       const index = c && c.requiredPages > 1 ? ` ${circled(p.contentPageIndex + 1)}` : '';
       const label = c ? `${esc(c.name)}${index}` : '空き';
-      // 生成画像があれば表示（PDFを直接描画せず、登録時に作った画像を共通利用）。無ければ「PDF未登録」
+      // 割り当て済みの画像だけを表示する（素材の並び順などから推測して表示しない）
       const url = getImageUrl(p.renderImageId);
-      const thumb = url
-        ? `<img src="${url}" alt="P${p.physicalPageNumber}のページ画像" class="h-full w-full object-contain" draggable="false" />`
-        : 'PDF未登録';
+      const st = pageState(cur, p, !!url);
+      const thumb =
+        st === 'image'
+          ? `<img src="${url}" alt="P${p.physicalPageNumber}のページ画像" class="h-full w-full object-contain" draggable="false" />`
+          : STATE_TEXT[st];
+      const stateCls = st === 'unassigned' ? 'text-amber-700' : 'text-slate-400';
       const bg = c ? 'bg-indigo-50' : 'bg-white border border-dashed border-slate-300';
       const drag = c ? `draggable="true" data-drag-content="${esc(c.id)}"` : '';
+      // 割り当ての解除：PCではhover/focus時に表示、タッチ環境では常時表示
+      const unassign =
+        st === 'image'
+          ? `<button type="button" data-action="unassign-page" data-no="${p.physicalPageNumber}" aria-label="P${p.physicalPageNumber}の画像の割り当てを解除"
+              class="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/95 text-sm text-slate-700 shadow ring-1 ring-slate-300 opacity-0 hover:bg-red-50 hover:text-red-700 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+              title="割り当てを解除">×</button>`
+          : '';
       return `
-        <li>
-          <div role="button" tabindex="0" data-action="select-page" data-no="${p.physicalPageNumber}" data-drop-page="${p.physicalPageNumber}" ${drag}
+        <li class="group relative">
+          <div role="button" tabindex="0" data-action="select-page" data-no="${p.physicalPageNumber}" data-drop-page="${p.physicalPageNumber}" data-page-state="${st}" ${drag}
             class="block w-full cursor-pointer rounded-lg bg-white p-2 text-left shadow-sm ${ring} hover:ring-indigo-300">
-            <div class="page-thumb flex items-center justify-center overflow-hidden rounded ${bg} text-xs text-slate-400">${thumb}</div>
+            <div class="page-thumb flex items-center justify-center overflow-hidden rounded ${bg} text-xs ${stateCls}" data-page-thumb>${thumb}</div>
             <div class="mt-2 flex items-center justify-between gap-1">
               <span class="text-sm font-semibold">P${p.physicalPageNumber}</span>
             </div>
             <div class="truncate text-xs text-slate-600">${label}</div>
-          </div>
+          </div>${unassign}
         </li>`;
     })
     .join('');
   return `<ul class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">${cards}</ul>`;
 }
 
-// 右カラム：選択ページ詳細（コンテンツ情報・配置解除）
-function renderDetail({ contents, pages, pdfAssets }, selectedNo) {
-  let detail = '<p class="text-sm text-slate-500">ページカードを選択すると詳細を表示します。</p>';
-  const p = selectedNo ? pages.find((x) => x.physicalPageNumber === selectedNo) : null;
-  if (p) {
-    const c = p.contentId ? contents.find((x) => x.id === p.contentId) : null;
-    const kind = !c ? '空きページ' : 'コンテンツ配置済み';
-    const rows = [
-      ['ページ', `<span class="font-semibold">P${p.physicalPageNumber}</span>`],
-      ['コンテンツ', c ? esc(c.name) : '-'],
-      ['状態', kind],
-    ];
-    if (c) {
-      rows.push(['必要ページ数', `${c.requiredPages}P`]);
-      rows.push(['配置範囲', rangeLabel(pages, c)]);
-      rows.push(['このページ', `${circled(p.contentPageIndex + 1)}（${p.contentPageIndex + 1}/${c.requiredPages}）`]);
-    }
-    rows.push(['このページのPDF', p.renderImageId ? '登録済み' : 'PDF未登録']);
-    const dl = rows
-      .map(([k, v]) => `<div class="flex justify-between gap-2"><dt class="shrink-0 whitespace-nowrap text-slate-500">${k}</dt><dd class="min-w-0 text-right">${v}</dd></div>`)
-      .join('');
-    const asset = c ? pdfAssets.find((a) => a.contentId === c.id) : null;
-    const pdfSection = c
-      ? `<div class="mt-4 border-t border-slate-200 pt-3">
-          <h3 class="mb-2 text-xs font-semibold text-slate-600">PDF（コンテンツ単位）</h3>
-          ${
-            asset
-              ? `<p class="break-all text-sm">${esc(asset.originalFileName)}</p>
-                 <p class="mb-2 text-xs text-slate-500">変換後${asset.pageCount}ページ／必要${c.requiredPages}ページ・登録 ${formatDateTime(asset.importedAt)}</p>
-                 <div class="flex flex-wrap gap-2">
-                   ${pdfPicker(c.id, 'PDFを差し替え')}
-                   <button type="button" class="${btnSecondary}" data-action="ask-unregister-pdf" data-id="${esc(c.id)}">PDF登録を解除</button>
-                 </div>`
-              : `<p class="mb-2 text-xs text-slate-500">PDF未登録</p>${pdfPicker(c.id, 'PDFを登録')}`
-          }
-        </div>`
-      : '';
-    const actions =
-      c
-        ? `<div class="mt-3"><button type="button" class="${btnSecondary}" data-action="unplace-content" data-id="${esc(c.id)}">配置を解除</button></div>`
-        : '';
-    detail = `<dl class="space-y-1 text-sm">${dl}</dl>${actions}${pdfSection}`;
+// 右カラム：PDF素材の管理（対象コンテンツの選択・PDFの登録／差し替え／削除・素材の一覧と割り当て）
+function renderMaterialItem(img, assignedPage) {
+  const url = getImageUrl(img.id);
+  const thumb = url
+    ? `<img src="${url}" alt="${esc(materialName(img))}のサムネイル" loading="lazy" decoding="async" class="h-full w-full object-contain" draggable="false" />`
+    : '';
+  const status = assignedPage
+    ? `<span class="text-indigo-700" data-material-status>P${assignedPage}に割り当て済み</span>`
+    : '<span class="text-slate-500" data-material-status>未割り当て</span>';
+  return `<li draggable="true" data-drag-image="${esc(img.id)}" data-material="${esc(img.id)}" data-assigned-page="${assignedPage ?? ''}"
+      class="flex cursor-grab items-center gap-3 rounded border ${assignedPage ? 'border-indigo-200 bg-indigo-50' : 'border-slate-200 bg-white'} p-2">
+      <div class="flex h-24 w-[4.5rem] shrink-0 items-center justify-center overflow-hidden rounded border border-slate-200 bg-slate-100">${thumb}</div>
+      <div class="min-w-0 text-sm"><p class="font-medium" data-material-name>${esc(materialName(img))}</p><p class="text-xs">${status}</p></div>
+    </li>`;
+}
+
+function renderMaterials(state) {
+  const cur = state.current;
+  const { contents, pages } = cur;
+  const head = '<h2 class="mb-3 text-sm font-semibold">PDF素材</h2>';
+  if (contents.length === 0) {
+    return `<section class="rounded-lg border border-slate-200 bg-white p-4" data-materials>${head}
+      <p class="text-sm text-slate-500" data-materials-empty>コンテンツを追加すると、ここでPDF素材を管理できます。</p></section>`;
   }
-  return `
-    <section class="rounded-lg border border-slate-200 bg-white p-4">
-      <h2 class="mb-3 text-sm font-semibold">選択ページ</h2>${detail}
-    </section>
-`;
+  const targetId = resolveMaterialContentId(contents, pages, state.selectedPageNo, state.materialContentId);
+  const content = contents.find((c) => c.id === targetId);
+  const asset = assetOfContent(cur, targetId);
+  const options = contents
+    .map((c) => `<option value="${esc(c.id)}" ${c.id === targetId ? 'selected' : ''}>${esc(c.name)}${assetOfContent(cur, c.id) ? '（PDFあり）' : ''}</option>`)
+    .join('');
+  const select = `<label for="m-content" class="block text-xs text-slate-600">対象コンテンツ</label>
+    <select id="m-content" data-material-select class="${inputCls} mb-3">${options}</select>`;
+
+  if (!asset) {
+    return `<section class="rounded-lg border border-slate-200 bg-white p-4" data-materials data-material-content="${esc(targetId)}">${head}${select}
+      <p class="mb-2 text-xs text-slate-500" data-material-none>「${esc(content.name)}」のPDFは未登録です。</p>
+      ${pdfPicker(targetId, '＋ PDFを登録')}</section>`;
+  }
+  const images = materialsOf(cur, targetId);
+  const used = assignmentMap(pages);
+  const pdfPages = new Set(images.map((i) => i.sourcePdfPage)).size;
+  const plan = planSequentialAssign(cur, targetId);
+  const items = images.map((img) => renderMaterialItem(img, used.get(img.id))).join('');
+  const menu = state.materialMenuOpen
+    ? `<div class="absolute right-0 z-10 mt-1 w-44 rounded-md border border-slate-200 bg-white py-1 shadow-lg" role="menu" data-material-menu-list>
+        <label class="block cursor-pointer px-3 py-2 text-sm hover:bg-slate-100 focus-within:bg-slate-100" role="menuitem">PDFを差し替え
+          <input type="file" accept="application/pdf,.pdf" class="sr-only" data-pdf-input data-content-id="${esc(targetId)}" />
+        </label>
+        <button type="button" class="block w-full px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50" role="menuitem" data-action="ask-unregister-pdf" data-id="${esc(targetId)}">PDFを削除</button>
+      </div>`
+    : '';
+  const seqTitle =
+    plan.count === 0
+      ? '割り当てできる素材、または空きページがありません'
+      : `未割り当ての素材を、このコンテンツの空きページへ順に割り当てます（${plan.count}ページ）`;
+  return `<section class="rounded-lg border border-slate-200 bg-white p-4" data-materials data-material-content="${esc(targetId)}">${head}${select}
+    <div class="mb-3 flex items-start justify-between gap-2">
+      <div class="min-w-0">
+        <p class="break-all text-sm font-medium" data-material-file>${esc(asset.originalFileName)}</p>
+        <p class="text-xs text-slate-500" data-material-count-line>PDF ${pdfPages}ページ／素材 ${images.length}</p>
+        <p class="text-xs text-slate-400">登録 ${formatDateTime(asset.importedAt)}</p>
+      </div>
+      <div class="relative shrink-0" data-material-menu>
+        <button type="button" class="${btnSecondary} !px-2 !py-1" data-action="toggle-material-menu" aria-haspopup="menu" aria-expanded="${state.materialMenuOpen}" aria-label="PDFのメニュー">︙</button>${menu}
+      </div>
+    </div>
+    <button type="button" class="${btnSecondary} mb-3 w-full" data-action="assign-sequential" data-id="${esc(targetId)}" ${plan.count === 0 ? 'disabled' : ''}
+      title="${seqTitle}">PDFを順番に割り当て</button>
+    <ul class="space-y-2" data-material-list>${items}</ul>
+    <p class="mt-3 text-xs text-slate-500">素材を、このコンテンツのページカードへドラッグして割り当てます。</p>
+  </section>`;
 }
 
 export function renderCompose(state) {
@@ -176,6 +206,6 @@ export function renderCompose(state) {
     <div class="grid gap-4 lg:h-full lg:grid-cols-[280px_minmax(0,1fr)_300px] lg:grid-rows-[minmax(0,1fr)]" data-compose-grid>
       <aside class="relative min-w-0 space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-left" data-column="left">${renderContentList(cur, state.contentDraft)}</aside>
       <section class="relative min-w-0 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-center" data-column="center">${renderPageCards(cur, state.selectedPageNo)}</section>
-      <aside class="relative min-w-0 space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-right" data-column="right">${renderDetail(cur, state.selectedPageNo)}</aside>
+      <aside class="relative min-w-0 space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-right" data-column="right">${renderMaterials(state)}</aside>
     </div>`;
 }

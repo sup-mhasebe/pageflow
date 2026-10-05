@@ -53,13 +53,14 @@ export function renderModal(state) {
     return `
       <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-scroll-key="modal" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
         <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
-          <h2 id="dlg-title" class="mb-2 text-lg font-semibold">PDF登録を解除</h2>
+          <h2 id="dlg-title" class="mb-2 text-lg font-semibold">PDFを削除</h2>
           <p class="mb-1 break-words text-sm font-medium">「${esc(m.contentName)}」／${esc(m.fileName)}</p>
-          <p class="mb-3 text-sm text-slate-700">コンテンツと冊子ページへの配置は残り、PDFとの関連だけが解除されます。元PDFの扱いを選んでください。</p>
+          <p class="mb-3 text-sm text-slate-700">このPDFの素材が削除されます。コンテンツと冊子ページへの配置は残ります。元PDFの扱いを選んでください。</p>
+          ${m.assigned > 0 ? `<p class="mb-3 rounded bg-amber-50 p-2 text-sm font-medium text-amber-800" role="alert" data-release-warning>${m.assigned}ページの割り当てが解除されます。</p>` : ''}
           ${modeRadios(m.mode, 'unregister')}
           <div class="mt-4 flex justify-end gap-3">
             <button type="button" class="${btnSecondary}" data-action="cancel-modal">キャンセル</button>
-            <button type="button" class="${btnPrimary}" data-action="confirm-unregister-pdf" ${m.mode ? '' : 'disabled'}>解除する</button>
+            <button type="button" class="${btnPrimary}" data-action="confirm-unregister-pdf" ${m.mode ? '' : 'disabled'}>削除する</button>
           </div>
         </div>
       </div>`;

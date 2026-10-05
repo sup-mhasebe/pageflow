@@ -1,6 +1,6 @@
 import { validateContentInput } from '../schemas.js';
 import { checkRange, isPlaced, startPageOf, unplaceContent } from './placement.js';
-import { assetOfContent, hasPdfRef, relinkPages, PDF_IN_USE_MESSAGE } from './pdf.js';
+import { assetOfContent } from './pdf.js';
 
 // ユーザーコンテンツのID。IndexedDB はキー順で返すため、作成順に並ぶよう時刻プレフィックスを付ける
 // 同一ミリ秒に複数作成しても順序が逆転しないよう、前回値より必ず大きくする
@@ -56,12 +56,8 @@ export function updateContent(state, contentId, rawName, rawRequiredPages) {
     const start = startPageOf(pages, contentId);
     const end = start + requiredPages - 1;
     if (requiredPages < content.requiredPages) {
-      // 解放されるページにPDF／生成画像がある場合は拒否する（PDFを暗黙的に削除・解除しない）
-      const freed = pages.filter((p) => p.contentId === contentId && p.physicalPageNumber > end);
-      if (freed.some(hasPdfRef)) {
-        return { ok: false, errors: { requiredPages: PDF_IN_USE_MESSAGE.replace('ページ数を変更できません', 'ページ数を減らせません') } };
-      }
-      // 減少：開始ページと先頭側の配置は維持し、不要になった末尾側のページだけ解除する
+      // 減少：開始ページと先頭側の配置は維持し、不要になった末尾側のページを解放する。
+      // 解放されるページの割り当ても解除する（事前の解除は求めない）。素材（RenderImage）・PdfAsset は削除せず、未割り当て素材として残る
       pages = pages.map((p) =>
         p.contentId === contentId && p.physicalPageNumber > end
           ? { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null }
@@ -75,7 +71,6 @@ export function updateContent(state, contentId, rawName, rawRequiredPages) {
           ? { ...p, contentId, contentPageIndex: p.physicalPageNumber - start }
           : p,
       );
-      pages = relinkPages({ ...state, pages });
     }
   }
   return { ok: true, content: { ...content, name, requiredPages }, pages };
