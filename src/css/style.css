@@ -15,15 +15,57 @@
   --ph: min(calc(100dvh - 280px), calc((100vw - 3.5rem) * 297 / 210));
 }
 .viewer-pages {
+  position: relative;
   display: flex;
   justify-content: center;
   align-items: flex-start;
 }
 .viewer-page {
+  position: relative;
   height: max(var(--ph), 240px);
   aspect-ratio: 210 / 297;
   flex: none;
   box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+}
+
+/* 綴じ辺ガイド（左綴じ）：約2pxの落ち着いた赤。画像の寸法・比率には影響しない */
+.viewer-spine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #b5484a;
+  pointer-events: none;
+  z-index: 2;
+}
+.viewer-spine[data-spine="left"] { left: 0; }
+.viewer-spine[data-spine="right"] { right: 0; }
+.viewer-spine[data-spine="center"] { left: 50%; transform: translateX(-50%); }
+.viewer-spine-sample {
+  display: inline-block;
+  width: 2px;
+  height: 0.9em;
+  margin-right: 0.4rem;
+  vertical-align: -0.1em;
+  background: #b5484a;
+}
+
+/* ページ送り：1024px以上は左右固定（列幅が固定なので表示幅が変わってもボタン位置は動かない）、未満は下部 */
+.viewer-layout { display: block; }
+.viewer-side-nav { display: none; }
+@media (min-width: 1024px) {
+  .viewer-layout {
+    display: grid;
+    grid-template-columns: 6.5rem minmax(0, 1fr) 6.5rem;
+    align-items: center;
+    column-gap: 0.75rem;
+  }
+  .viewer-side-nav { display: inline-flex; justify-content: center; }
+  .viewer-bottom-nav { display: none; }
+  /* 左右ナビの列（約14rem）を差し引いて、ページ高さを決める */
+  .viewer-stage[data-mode="spread"] {
+    --ph: min(calc(100dvh - 300px), calc((min(100vw, 72rem) - 4rem - 14rem) * 297 / 420));
+  }
 }
 
 /* 軽量なページ切替アニメーション（スライド＋フェード）。3Dページめくりは使わない */
