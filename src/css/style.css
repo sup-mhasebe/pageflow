@@ -16,6 +16,9 @@
 }
 .viewer-pages {
   position: relative;
+  /* 綴じ辺ガイド(left/right)がページ画像の端に付くよう、表示枠いっぱいではなくページ幅に収める */
+  width: fit-content;
+  margin-inline: auto;
   display: flex;
   justify-content: center;
   align-items: flex-start;
