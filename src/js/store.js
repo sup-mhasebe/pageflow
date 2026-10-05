@@ -19,7 +19,10 @@ import * as pdf from './pdf.js';
 import { classifyPdfError, describeError } from './domain/pdf-errors.js';
 import { clearImages, removeImages, setImage } from './images.js';
 import { buildScreens, neighborIndex, screenIndexOf } from './domain/viewer.js';
+import { MODES, ZOOM_DEFAULT, clampZoom, stepZoom } from './domain/compose-view.js';
 import { createPackage, readPackage, safeFileName } from './pageflow-file.js';
+
+const initialComposeView = () => ({ mode: 'list', zoom: ZOOM_DEFAULT });
 
 // アプリ状態。画面は state を元に描画し、変更は下記の action 経由で行う
 const state = {
@@ -30,6 +33,7 @@ const state = {
   selectedPageNo: null,
   materialContentId: null, // 右カラム（PDF素材）の対象コンテンツ。画面上の一時状態で、保存しない
   materialMenuOpen: false, // 右カラムの［︙］メニュー
+  composeView: initialComposeView(), // 中央ビューの表示（一覧／見開き・倍率）。画面上の一時状態で、冊子データには保存しない
   tab: 'compose',
   saveStatus: 'saved', // saving | saved | error
   modal: null,
@@ -212,6 +216,7 @@ export async function openBooklet(id) {
   state.selectedPageNo = null;
   state.materialContentId = null;
   state.materialMenuOpen = false;
+  state.composeView = initialComposeView(); // 別の冊子の表示状態（見開き・拡大率）は引き継がない
   state.tab = 'compose';
   state.viewer = { pageNo: 1, showInfo: state.viewer.showInfo, anim: null };
   state.saveStatus = 'saved';
@@ -248,6 +253,22 @@ export function selectPage(no) {
   state.materialMenuOpen = false;
   notify();
 }
+
+// 中央ビューの表示モード（一覧／見開き）と倍率。冊子データ（配置・割り当て）には触れない
+export function setComposeMode(mode) {
+  if (!MODES.includes(mode) || state.composeView.mode === mode) return;
+  state.composeView = { ...state.composeView, mode };
+  notify();
+}
+
+export function setComposeZoom(zoom) {
+  const z = clampZoom(zoom);
+  if (state.composeView.zoom === z) return;
+  state.composeView = { ...state.composeView, zoom: z };
+  notify();
+}
+
+export const stepComposeZoom = (direction) => setComposeZoom(stepZoom(state.composeView.zoom, direction));
 
 // 右カラムの対象コンテンツをドロップダウンで切り替える
 export function setMaterialContent(contentId) {

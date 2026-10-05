@@ -8,6 +8,7 @@ import { renderModal, renderToast } from './ui/dialog.js';
 import { validateNewBooklet } from './schemas.js';
 import { checkRange, isPlaced } from './domain/placement.js';
 import { checkAssign } from './domain/assignment.js';
+import { fitZoom } from './domain/compose-view.js';
 import { captureViewState, restoreViewState } from './ui/view-state.js';
 
 const root = document.getElementById('app');
@@ -112,6 +113,20 @@ const go = (hash) => {
   if (location.hash === hash) route();
   else location.hash = hash;
 };
+
+// ［全体表示］：中央ビューの表示領域に、現在の表示モード（一覧／見開き）のページ全体が収まる倍率にする
+function zoomToFit() {
+  const st = store.getState();
+  const col = root.querySelector('[data-column="center"]');
+  if (!col || !st.current) return;
+  const bar = col.querySelector('[data-compose-toolbar]');
+  const style = getComputedStyle(col);
+  const width = col.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 4;
+  // 3カラム（lg以上）は中央カラムの高さ、縦積みのときは画面の高さを基準にする
+  const scrollable = matchMedia('(min-width: 1024px)').matches;
+  const height = (scrollable ? col.clientHeight : window.innerHeight) - (bar?.offsetHeight ?? 0) - 12;
+  store.setComposeZoom(fitZoom({ mode: st.composeView.mode, totalPages: st.current.booklet.totalPages, width, height }));
+}
 
 // ---- クリック操作 ----
 root.addEventListener('click', async (e) => {
@@ -259,6 +274,18 @@ root.addEventListener('click', async (e) => {
         if (!r.ok) store.showToast(r.reason, 'error');
         break;
       }
+      case 'compose-mode':
+        store.setComposeMode(el.dataset.mode);
+        break;
+      case 'zoom-in':
+        store.stepComposeZoom(1);
+        break;
+      case 'zoom-out':
+        store.stepComposeZoom(-1);
+        break;
+      case 'zoom-fit':
+        zoomToFit();
+        break;
       case 'toggle-material-menu':
         store.toggleMaterialMenu();
         break;

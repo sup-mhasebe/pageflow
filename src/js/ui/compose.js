@@ -3,6 +3,7 @@ import { placementPages, placementLabel, pdfSummary, pdfSummaryLabel, materialCo
 import { presetStatus } from '../domain/preset.js';
 import { assetOfContent } from '../domain/pdf.js';
 import { contentColor } from '../domain/content-color.js';
+import { ZOOM_MAX, ZOOM_MIN, cardWidth, spreadRows, zoomLabel } from '../domain/compose-view.js';
 import { assignmentMap, materialName, materialsOf, pageState, planSequentialAssign, resolveMaterialContentId } from '../domain/assignment.js';
 import { getImageUrl } from '../images.js';
 import { formatDateTime } from './util.js';
@@ -86,52 +87,91 @@ function renderContentList(cur, draft) {
 // 表示は4状態：空き／PDF未登録／素材あり・未割り当て／画像
 const STATE_TEXT = { empty: '', 'no-pdf': 'PDF未登録', unassigned: '素材あり・未割り当て' };
 
-function renderPageCards(cur, selectedNo) {
-  const { contents, pages } = cur;
-  const byId = new Map(contents.map((c) => [c.id, c]));
-  const cards = pages
-    .map((p) => {
-      const c = p.contentId ? byId.get(p.contentId) : null;
-      const selected = p.physicalPageNumber === selectedNo;
-      const ring = selected ? 'ring-2 ring-indigo-500' : 'ring-1 ring-slate-200';
-      const index = c && c.requiredPages > 1 ? ` ${circled(p.contentPageIndex + 1)}` : '';
-      const label = c ? `${esc(c.name)}${index}` : '空き';
-      // 割り当て済みの画像だけを表示する（素材の並び順などから推測して表示しない）
-      const url = getImageUrl(p.renderImageId);
-      const st = pageState(cur, p, !!url);
-      const thumb =
-        st === 'image'
-          ? `<img src="${url}" alt="P${p.physicalPageNumber}のページ画像" class="h-full w-full object-contain" draggable="false" />`
-          : STATE_TEXT[st];
-      const stateCls = st === 'unassigned' ? 'text-amber-700' : 'text-slate-400';
-      // 所属Contentの色は、ページ枠・背景・ラベルで示す（画像には色を重ねない）
-      const col = c ? contentColor(contents, c) : null;
-      const bg = c ? '' : 'bg-white border border-dashed border-slate-300';
-      const thumbStyle = c ? 'style="background:rgba(255,255,255,.6)"' : '';
-      const cardStyle = c ? `style="background:${col.bg};border-color:${col.border}" data-content-color="${col.key}"` : '';
-      // ページ同士の入れ替え（swap）用。内容のあるページだけドラッグできる
-      const drag = c ? `draggable="true" data-drag-page="${p.physicalPageNumber}"` : '';
-      // 割り当ての解除：PCではhover/focus時に表示、タッチ環境では常時表示
-      const unassign =
-        st === 'image'
-          ? `<button type="button" data-action="unassign-page" data-no="${p.physicalPageNumber}" aria-label="P${p.physicalPageNumber}の画像の割り当てを解除"
-              class="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/95 text-sm text-slate-700 shadow ring-1 ring-slate-300 opacity-0 hover:bg-red-50 hover:text-red-700 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
-              title="割り当てを解除">×</button>`
-          : '';
-      return `
-        <li class="group relative">
-          <div role="button" tabindex="0" data-action="select-page" data-no="${p.physicalPageNumber}" data-drop-page="${p.physicalPageNumber}" data-page-state="${st}" ${drag} ${cardStyle}
-            class="block w-full cursor-pointer rounded-lg border-2 ${c ? '' : 'border-transparent bg-white'} p-2 text-left shadow-sm ${ring} hover:ring-indigo-300">
-            <div class="page-thumb flex items-center justify-center overflow-hidden rounded ${bg} text-xs ${stateCls}" ${thumbStyle} data-page-thumb>${thumb}</div>
-            <div class="mt-2 flex items-center justify-between gap-1">
-              <span class="text-sm font-semibold">P${p.physicalPageNumber}</span>
-            </div>
-            <div class="truncate text-xs text-slate-600">${label}</div>
-          </div>${unassign}
-        </li>`;
-    })
-    .join('');
-  return `<ul class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">${cards}</ul>`;
+function renderPageCard(cur, p, selectedNo, width) {
+  const { contents } = cur;
+  const c = p.contentId ? contents.find((x) => x.id === p.contentId) : null;
+  const selected = p.physicalPageNumber === selectedNo;
+  const ring = selected ? 'ring-2 ring-indigo-500' : 'ring-1 ring-slate-200';
+  const index = c && c.requiredPages > 1 ? ` ${circled(p.contentPageIndex + 1)}` : '';
+  const label = c ? `${esc(c.name)}${index}` : '空き';
+  // 割り当て済みの画像だけを表示する（素材の並び順などから推測して表示しない）
+  const url = getImageUrl(p.renderImageId);
+  const st = pageState(cur, p, !!url);
+  const thumb =
+    st === 'image'
+      ? `<img src="${url}" alt="P${p.physicalPageNumber}のページ画像" class="h-full w-full object-contain" draggable="false" />`
+      : STATE_TEXT[st];
+  const stateCls = st === 'unassigned' ? 'text-amber-700' : 'text-slate-400';
+  // 所属Contentの色は、ページ枠・背景・ラベルで示す（画像には色を重ねない）
+  const col = c ? contentColor(contents, c) : null;
+  const bg = c ? '' : 'bg-white border border-dashed border-slate-300';
+  const thumbStyle = c ? 'style="background:rgba(255,255,255,.6)"' : '';
+  const cardStyle = c ? `style="background:${col.bg};border-color:${col.border}" data-content-color="${col.key}"` : '';
+  // ページ同士の入れ替え（swap）用。内容のあるページだけドラッグできる
+  const drag = c ? `draggable="true" data-drag-page="${p.physicalPageNumber}"` : '';
+  // 割り当ての解除：PCではhover/focus時に表示、タッチ環境では常時表示
+  const unassign =
+    st === 'image'
+      ? `<button type="button" data-action="unassign-page" data-no="${p.physicalPageNumber}" aria-label="P${p.physicalPageNumber}の画像の割り当てを解除"
+          class="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/95 text-sm text-slate-700 shadow ring-1 ring-slate-300 opacity-0 hover:bg-red-50 hover:text-red-700 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+          title="割り当てを解除">×</button>`
+      : '';
+  return `
+    <div class="group relative" style="width:${width}px" data-page-wrap="${p.physicalPageNumber}">
+      <div role="button" tabindex="0" data-action="select-page" data-no="${p.physicalPageNumber}" data-drop-page="${p.physicalPageNumber}" data-page-state="${st}" ${drag} ${cardStyle}
+        class="block w-full cursor-pointer rounded-lg border-2 ${c ? '' : 'border-transparent bg-white'} p-2 text-left shadow-sm ${ring} hover:ring-indigo-300">
+        <div class="page-thumb flex items-center justify-center overflow-hidden rounded ${bg} text-xs ${stateCls}" ${thumbStyle} data-page-thumb>${thumb}</div>
+        <div class="mt-2 flex items-center justify-between gap-1">
+          <span class="text-sm font-semibold">P${p.physicalPageNumber}</span>
+        </div>
+        <div class="truncate text-xs text-slate-600">${label}</div>
+      </div>${unassign}
+    </div>`;
+}
+
+// 中央ビューの表示切り替え（一覧／見開き）と拡大・縮小。表示設定だけを変え、保存データは変更しない
+function renderComposeToolbar(view) {
+  const seg = (mode, text) =>
+    `<button type="button" data-action="compose-mode" data-mode="${mode}" aria-pressed="${view.mode === mode}"
+      class="px-3 py-1.5 text-sm font-medium ${view.mode === mode ? 'bg-indigo-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-100'} focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-400">${text}</button>`;
+  const zbtn = `${btnSecondary} !px-2.5 !py-1`;
+  return `<div class="sticky top-0 z-10 -mx-1 mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 bg-white/95 px-1 py-2 backdrop-blur" data-compose-toolbar>
+      <div class="inline-flex overflow-hidden rounded-md border border-slate-300" role="group" aria-label="表示の切り替え">${seg('list', '一覧で表示')}${seg('spread', '見開きで表示')}</div>
+      <div class="inline-flex items-center gap-1" role="group" aria-label="拡大・縮小">
+        <button type="button" class="${zbtn}" data-action="zoom-out" aria-label="縮小" ${view.zoom <= ZOOM_MIN ? 'disabled' : ''}>－</button>
+        <span class="min-w-[3.5rem] text-center text-sm font-medium tabular-nums" data-zoom-label aria-live="polite">${zoomLabel(view.zoom)}</span>
+        <button type="button" class="${zbtn}" data-action="zoom-in" aria-label="拡大" ${view.zoom >= ZOOM_MAX ? 'disabled' : ''}>＋</button>
+        <button type="button" class="${zbtn}" data-action="zoom-fit" title="ページ全体が見える倍率にします">全体表示</button>
+      </div>
+    </div>`;
+}
+
+// 中央カラム：ツールバー＋ページ（一覧または見開き）。見開きは左綴じ：P1単独｜P2・P3｜…｜PN単独
+function renderCenter(state) {
+  const cur = state.current;
+  const view = state.composeView;
+  const w = cardWidth(view.zoom);
+  const byNo = new Map(cur.pages.map((p) => [p.physicalPageNumber, p]));
+  const card = (no) => renderPageCard(cur, byNo.get(no), state.selectedPageNo, w);
+  let body;
+  if (view.mode === 'spread') {
+    const rows = spreadRows(cur.booklet.totalPages);
+    const last = rows.length - 1;
+    const html = rows
+      .map((nums, i) => {
+        // 単独ページは、本のように P1 は右側・最終ページは左側に置く（反対側は空白）
+        const spacer = `<div style="width:${w}px" aria-hidden="true"></div>`;
+        const inner = nums.length === 2 ? `${card(nums[0])}${card(nums[1])}` : i === 0 ? `${spacer}${card(nums[0])}` : i === last ? `${card(nums[0])}${spacer}` : card(nums[0]);
+        return `<div class="flex w-fit shrink-0 gap-2 rounded-lg bg-slate-100 p-2" data-spread="${nums.join('-')}">${inner}</div>`;
+      })
+      .join('');
+    // 見開きのまとまりは、中央ビューの幅に収まる数だけ横に並ぶ（折り返す）
+    body = `<div class="flex flex-wrap items-start gap-3 overflow-x-auto pb-1" data-compose-body data-mode="spread">${html}</div>`;
+  } else {
+    const cards = cur.pages.map((p) => card(p.physicalPageNumber)).join('');
+    body = `<div class="grid gap-3" style="grid-template-columns:repeat(auto-fill,minmax(min(${w}px,100%),${w}px))" data-compose-body data-mode="list">${cards}</div>`;
+  }
+  return `${renderComposeToolbar(view)}${body}`;
 }
 
 // 右カラム：PDF素材の管理（対象コンテンツの選択・PDFの登録／差し替え／削除・素材の一覧と割り当て）
@@ -213,7 +253,7 @@ export function renderCompose(state) {
   return `
     <div class="grid gap-4 lg:h-full lg:grid-cols-[280px_minmax(0,1fr)_300px] lg:grid-rows-[minmax(0,1fr)]" data-compose-grid>
       <aside class="relative min-w-0 space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-left" data-column="left">${renderContentList(cur, state.contentDraft)}</aside>
-      <section class="relative min-w-0 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-center" data-column="center">${renderPageCards(cur, state.selectedPageNo)}</section>
+      <section class="relative min-w-0 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-center" data-column="center">${renderCenter(state)}</section>
       <aside class="relative min-w-0 space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-right" data-column="right">${renderMaterials(state)}</aside>
     </div>`;
 }
