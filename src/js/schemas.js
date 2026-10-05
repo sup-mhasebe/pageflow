@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// 総ページ数の下限。4ページでは固定ページ（目次と裏表紙裏）が重なるため8から
+// 総ページ数の下限（v0.1の仕様：8ページ以上の4の倍数。上限は設けない）
 export const MIN_TOTAL_PAGES = 8;
 
 export const bookletNameSchema = z
@@ -14,7 +14,7 @@ export const totalPagesSchema = z
   .int('総ページ数は整数で入力してください')
   .min(
     MIN_TOTAL_PAGES,
-    `総ページ数は${MIN_TOTAL_PAGES}以上で指定してください（4ページでは固定ページが重なるため指定できません）`,
+    `総ページ数は${MIN_TOTAL_PAGES}以上で指定してください`,
   )
   .refine((n) => n % 4 === 0, '総ページ数は4の倍数で指定してください');
 
@@ -85,12 +85,17 @@ export const bookletRecordSchema = z.object({
   updatedAt: z.string(),
 });
 
+// 標準構成から作ったコンテンツの識別キー（名前の変更や同名のコンテンツと区別するため）
+export const PRESET_KEYS = ['cover', 'coverBack', 'toc', 'backCoverInner', 'backCover'];
+
+// isFixed は旧バージョンの項目（固定ページ）。読み込み時に通常コンテンツとして扱い、新規保存では false を書く
 export const contentRecordSchema = z.object({
   id: z.string(),
   bookletId: z.string(),
   name: z.string().min(1),
   requiredPages: z.number().int().min(1),
-  isFixed: z.boolean(),
+  isFixed: z.boolean().optional(),
+  presetKey: z.enum(PRESET_KEYS).optional(),
 });
 
 export const pageRecordSchema = z.object({

@@ -9,7 +9,8 @@ import {
   bookletNameSchema,
   parseTotalPagesInput,
 } from './schemas.js';
-import { createBooklet, resizeBooklet } from './domain/booklet.js';
+import { createBooklet, planResize, resizeBooklet } from './domain/booklet.js';
+import { normalizeContent } from './domain/preset.js';
 import { addContent, updateContent, deleteContent, sortContents } from './domain/content.js';
 import { placeContent, unplaceContent, startPageOf } from './domain/placement.js';
 import { assetOfContent, buildRegistration, buildUnregister, checkPageCount, convertedPageCount } from './domain/pdf.js';
@@ -30,6 +31,8 @@ const state = {
   modal: null,
   toast: null,
   contentDraft: { name: '', requiredPages: '1', errors: {} }, // コンテンツ追加フォームの入力
+  nameEdit: null, // 冊子名のインライン編集中：{ draft, error }
+  focusRequest: null, // 再描画後にフォーカスして全選択する入力欄のid（一度だけ使う）
   // ビューアの表示状態（閲覧用の一時状態。編集データではないためIndexedDBへは保存しない）
   viewer: { pageNo: 1, showInfo: true, anim: null },
   viewerMode: 'spread', // 'spread'（PC・見開き）| 'single'（スマートフォン・1ページ）
@@ -43,6 +46,48 @@ const state = {
 // 入力中の値を保持する（再描画しても消えないよう state に置くが、通知はしない）
 export function setContentDraft(draft) {
   state.contentDraft = draft;
+}
+
+// ---- 冊子名のインライン編集（Enterで確定、Escで取り消し。保存は既存の自動保存と同じ）----
+export function startNameEdit() {
+  if (!state.current) return;
+  state.nameEdit = { draft: state.current.booklet.name, error: null };
+  state.focusRequest = 'h-name';
+  notify();
+}
+
+export function setNameDraft(value) {
+  if (state.nameEdit) state.nameEdit.draft = value; // 入力中は再描画しない
+}
+
+export function cancelNameEdit() {
+  state.nameEdit = null;
+  notify();
+}
+
+// 確定。検証エラーのときは編集状態を保ち、入力欄の下に表示する
+export async function commitNameEdit(rawName) {
+  if (!state.nameEdit) return;
+  const r = await renameBookletAction(rawName);
+  if (!r.ok) {
+    state.nameEdit = { draft: rawName, error: r.reason };
+    state.focusRequest = 'h-name';
+    notify();
+    return;
+  }
+  state.nameEdit = null;
+  notify();
+}
+
+// 入力欄の中身を変えずに、保持している文字だけ更新する（再描画しない）
+export function setModalField(name, value) {
+  if (state.modal) state.modal[name] = value;
+}
+
+export function takeFocusRequest() {
+  const id = state.focusRequest;
+  state.focusRequest = null;
+  return id;
 }
 
 const listeners = new Set();
@@ -112,11 +157,13 @@ function parseBookletSet(raw, pdfRaw) {
   ) {
     return null;
   }
-  // IndexedDB はキー順で返すため、表示順（固定→ユーザーコンテンツ作成順）に並べ直す
+  // 旧バージョンの固定ページ（isFixed）は通常コンテンツとして扱う（保存済みデータは壊さず、次の保存時に更新される）。
+  // IndexedDB はキー順で返すため、表示順（配置済みは開始ページ順、未配置は作成順）に並べ直す
+  const pageList = pages.map((r) => r.data);
   return {
     booklet: booklet.data,
-    contents: sortContents(contents.map((r) => r.data)),
-    pages: pages.map((r) => r.data),
+    contents: sortContents(contents.map((r) => normalizeContent(r.data)), pageList),
+    pages: pageList,
     pdfAssets: assets.map((r) => r.data),
     renderImages: images.map((r) => r.data),
   };
@@ -161,6 +208,7 @@ export async function openBooklet(id) {
 export function closeBooklet() {
   clearImages();
   state.current = null;
+  state.nameEdit = null;
   state.selectedPageNo = null;
   notify();
 }
@@ -181,10 +229,11 @@ export function selectPage(no) {
 }
 
 // 新規冊子の作成。成功時は新しい冊子IDを返す
-export async function createBookletAction(rawName, rawTotalPages) {
+// withPreset が true のときは、標準構成（表紙・表紙裏・目次・裏表紙裏・裏表紙）を最初にセットする
+export async function createBookletAction(rawName, rawTotalPages, withPreset = false) {
   const result = validateNewBooklet(rawName, rawTotalPages);
   if (!result.ok) return { ok: false, errors: result.errors };
-  const set = createBooklet(result.data.name, result.data.totalPages);
+  const set = createBooklet(result.data.name, result.data.totalPages, { preset: withPreset });
   await persist(set);
   return { ok: true, id: set.booklet.id };
 }
@@ -201,6 +250,14 @@ export async function renameBookletAction(rawName) {
   return { ok: true };
 }
 
+// 総ページ数の変更の見積もり（確認ダイアログの要否と内容）。何も変更しない
+export function planResizeAction(rawTotalPages) {
+  const parsed = parseTotalPagesInput(rawTotalPages);
+  if (!parsed.success) return { ok: false, reason: parsed.error.issues[0].message };
+  return { ...planResize(state.current, parsed.data), newTotalPages: parsed.data };
+}
+
+// 総ページ数の変更。コンテンツ・PDF素材は削除せず、ページの配置だけが変わる
 export async function resizeBookletAction(rawTotalPages) {
   const parsed = parseTotalPagesInput(rawTotalPages);
   if (!parsed.success) return { ok: false, reason: parsed.error.issues[0].message };
@@ -248,7 +305,7 @@ async function commitCurrent({
   for (const img of put.renderImages ?? []) setImage(img.id, img.imageBlob);
   state.current = {
     booklet,
-    contents: sortContents(contents),
+    contents: sortContents(contents, pages),
     pages,
     pdfAssets: pdfAssets ?? cur.pdfAssets,
     renderImages: renderImages ?? cur.renderImages,

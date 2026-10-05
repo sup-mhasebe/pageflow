@@ -10,11 +10,23 @@ export function newContentId(now = Date.now()) {
   return `c_${lastStamp.toString(36).padStart(9, '0')}_${crypto.randomUUID()}`;
 }
 
-// 表示順：固定コンテンツ（表紙→裏表紙）の後にユーザーコンテンツを作成順で並べる
-export const FIXED_ORDER = ['表紙', '表紙裏', '目次', '裏表紙裏', '裏表紙'];
-export function sortContents(contents) {
-  const rank = (c) => (c.isFixed ? FIXED_ORDER.indexOf(c.name) : FIXED_ORDER.length);
-  return [...contents].sort((a, b) => rank(a) - rank(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+// 表示順：配置済みのコンテンツは開始ページ順、未配置のコンテンツはその後ろに作成順（IDの昇順）
+export function sortContents(contents, pages = []) {
+  const start = new Map();
+  for (const p of pages) {
+    if (!p.contentId) continue;
+    const cur = start.get(p.contentId);
+    if (cur === undefined || p.physicalPageNumber < cur) start.set(p.contentId, p.physicalPageNumber);
+  }
+  const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  return [...contents].sort((a, b) => {
+    const sa = start.get(a.id);
+    const sb = start.get(b.id);
+    if (sa !== undefined && sb !== undefined) return sa - sb || byId(a, b);
+    if (sa !== undefined) return -1;
+    if (sb !== undefined) return 1;
+    return byId(a, b);
+  });
 }
 
 export function addContent(state, rawName, rawRequiredPages) {
@@ -35,7 +47,6 @@ export function addContent(state, rawName, rawRequiredPages) {
 export function updateContent(state, contentId, rawName, rawRequiredPages) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, errors: { name: 'コンテンツが見つかりません。' } };
-  if (content.isFixed) return { ok: false, errors: { name: '固定ページは編集できません。' } };
   const v = validateContentInput(rawName, rawRequiredPages);
   if (!v.ok) return { ok: false, errors: v.errors };
 
@@ -77,7 +88,6 @@ export function updateContent(state, contentId, rawName, rawRequiredPages) {
 export function deleteContent(state, contentId, mode) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, reason: 'コンテンツが見つかりません。' };
-  if (content.isFixed) return { ok: false, reason: '固定ページは削除できません。' };
   const existing = assetOfContent(state, contentId);
   if (existing && mode !== 'trash' && mode !== 'delete') {
     return { ok: false, reason: 'PDFの扱い（ゴミ箱へ移す／完全削除）を選択してください。' };
@@ -102,10 +112,9 @@ export function deleteContent(state, contentId, mode) {
   };
 }
 
-// 容量チェック：登録コンテンツの合計ページ数が、固定ページ以外のページ数を超えていないか
+// 容量チェック：登録コンテンツの必要ページ数の合計が、総ページ数を超えていないか
 export function capacity(state) {
-  const fixed = state.contents.filter((c) => c.isFixed).length;
-  const available = state.booklet.totalPages - fixed;
-  const registered = state.contents.filter((c) => !c.isFixed).reduce((s, c) => s + c.requiredPages, 0);
+  const available = state.booklet.totalPages;
+  const registered = state.contents.reduce((s, c) => s + c.requiredPages, 0);
   return { available, registered, over: registered > available };
 }

@@ -12,7 +12,7 @@ export function buildViewerModel(current) {
     totalPages: booklet.totalPages,
     pages: pages.map((p) => {
       const c = p.contentId ? byId.get(p.contentId) : null;
-      const index = c && !c.isFixed && c.requiredPages > 1 ? ` ${circled(p.contentPageIndex + 1)}` : '';
+      const index = c && c.requiredPages > 1 ? ` ${circled(p.contentPageIndex + 1)}` : '';
       return {
         physicalPageNumber: p.physicalPageNumber,
         contentName: c ? `${c.name}${index}` : '空き',

@@ -4,7 +4,7 @@ import { createBooklet } from '../src/js/domain/booklet.js';
 import { placeContent, unplaceContent, startPageOf, checkRange } from '../src/js/domain/placement.js';
 import { addContent, updateContent, deleteContent, capacity, sortContents } from '../src/js/domain/content.js';
 
-// 12ページ冊子（固定：P1/P2/P3/P11/P12、配置可能：P4〜P10）にコンテンツを登録した状態を作る
+// 12ページ冊子（全ページが自由に使える通常ページ）にコンテンツを登録した状態を作る
 function setup(defs = [['特集', 2]]) {
   const state = createBooklet('テスト冊子', 12);
   const ids = [];
@@ -45,21 +45,37 @@ test('連続空き不足（途中に使用中ページがある）場合は拒�
   assert.equal(JSON.stringify(s1.pages), before);
 });
 
-test('固定ページ・冊子末尾を超える位置への配置は拒否する', () => {
+test('冊子の範囲外・末尾を超える位置への配置は拒否し、P1〜P12は自由に使える', () => {
   const { state, ids } = setup([['特集', 2]]);
-  assert.equal(placeContent(state, ids[0], 2).ok, false); // P2は固定
-  assert.equal(placeContent(state, ids[0], 3).ok, false); // P3は固定
-  assert.equal(placeContent(state, ids[0], 10).ok, false); // P11が固定
-  assert.equal(placeContent(state, ids[0], 12).ok, false); // 範囲外・固定
-  assert.equal(placeContent(state, ids[0], 9).ok, true); // P9-P10
+  assert.equal(placeContent(state, ids[0], 0).ok, false);
+  assert.equal(placeContent(state, ids[0], 13).ok, false);
+  assert.equal(placeContent(state, ids[0], 12).ok, false); // P12から2ページは末尾を超える
+  assert.match(placeContent(state, ids[0], 12).reason, /最終ページ/);
+  for (const start of [1, 2, 3, 10, 11]) assert.equal(placeContent(state, ids[0], start).ok, true, `P${start}`);
 });
 
-test('固定コンテンツは配置・移動・解除・削除できない', () => {
-  const { state } = setup();
-  const fixedId = state.contents.find((c) => c.isFixed).id;
-  assert.equal(placeContent(state, fixedId, 4).ok, false);
-  assert.equal(unplaceContent(state, fixedId).ok, false);
-  assert.equal(deleteContent(state, fixedId).ok, false);
+test('標準構成から作ったコンテンツ（表紙など）も、通常のコンテンツと同じく配置・移動・解除・削除できる', () => {
+  const set = createBooklet('テスト冊子', 12, { preset: true });
+  const state = { ...set, pdfAssets: [], renderImages: [] };
+  const cover = state.contents.find((c) => c.presetKey === 'cover');
+  assert.equal(state.pages[0].contentId, cover.id); // P1
+  const moved = placeContent(state, cover.id, 5); // P1 → P5（空き）
+  assert.equal(moved.ok, true);
+  const s1 = apply(state, moved);
+  assert.equal(s1.pages[0].contentId, null);
+  assert.equal(s1.pages[4].contentId, cover.id);
+  const un = unplaceContent(s1, cover.id);
+  assert.equal(un.ok, true);
+  assert.equal(un.pages.some((p) => p.contentId === cover.id), false);
+  const del = deleteContent(s1, cover.id);
+  assert.equal(del.ok, true);
+  assert.equal(del.contents.some((c) => c.id === cover.id), false);
+  // 標準構成の位置（P2＝表紙裏）は、他のコンテンツで使用中なら配置できない（上書きしない）
+  const other = addContent(state, '特集', '1');
+  const s2 = { ...state, contents: [...state.contents, other.content] };
+  const r = placeContent(s2, other.content.id, 2);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /表紙裏/);
 });
 
 test('移動：空きがあれば移動でき、旧位置は空きになる', () => {
@@ -160,7 +176,7 @@ test('P数減少（配置済み）：3P→1Pでも開始ページは変わらず
   const r = updateContent(s, ids[0], '特集', '1');
   assert.equal(r.ok, true);
   assert.deepEqual(occupied({ ...s, pages: r.pages }, ids[0]), [[5, 0]]);
-  // 固定ページを含む他のページは変更されない
+  // 他のページは変更されない
   const changed = r.pages.filter((p, i) => JSON.stringify(p) !== JSON.stringify(s.pages[i]));
   assert.deepEqual(changed.map((p) => p.physicalPageNumber), [6, 7]);
 });
@@ -184,18 +200,26 @@ test('zod：コンテンツ名は必須、必要ページ数は1以上の整数�
   assert.equal(addContent(state, ' 特集 ', '3').content.name, '特集');
 });
 
-test('容量チェック：固定5Pを除いたページ数を超える登録で警告', () => {
-  const { state } = setup([['A', 4], ['B', 3]]);
-  assert.deepEqual(capacity(state), { available: 7, registered: 7, over: false });
+test('容量チェック：必要ページ数の合計が総ページ数を超える登録で警告', () => {
+  const { state } = setup([['A', 8], ['B', 4]]);
+  assert.deepEqual(capacity(state), { available: 12, registered: 12, over: false });
   const r = addContent(state, 'C', '1');
   const over = { ...state, contents: [...state.contents, r.content] };
   assert.equal(capacity(over).over, true);
 });
 
-test('表示順：固定コンテンツ（表紙→裏表紙）の後にユーザーコンテンツ（作成順）', () => {
-  const { state } = setup([['A', 1], ['B', 1]]);
-  const names = sortContents([...state.contents].reverse()).map((c) => c.name);
-  assert.deepEqual(names, ['表紙', '表紙裏', '目次', '裏表紙裏', '裏表紙', 'A', 'B']);
+test('表示順：配置済みは開始ページ順、未配置はその後ろに作成順', () => {
+  const { state, ids } = setup([['A', 1], ['B', 2], ['C', 1], ['D', 1]]);
+  let s = state;
+  s = apply(s, placeContent(s, ids[2], 3)); // C → P3
+  s = apply(s, placeContent(s, ids[1], 8)); // B → P8-P9
+  s = apply(s, placeContent(s, ids[0], 11)); // A → P11
+  // D は未配置
+  const names = sortContents([...s.contents].reverse(), s.pages).map((c) => c.name);
+  assert.deepEqual(names, ['C', 'B', 'A', 'D']);
+  // 配置を動かすと並びも変わる（A を P1 へ）
+  const s2 = apply(s, placeContent(s, ids[0], 1));
+  assert.deepEqual(sortContents(s2.contents, s2.pages).map((c) => c.name), ['A', 'C', 'B', 'D']);
 });
 
 test('checkRange：範囲外の開始位置を拒否する', () => {

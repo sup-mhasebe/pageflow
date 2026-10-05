@@ -1,14 +1,15 @@
 import { esc, btnPrimary, btnSecondary, inputCls } from './util.js';
-import { fixedLayout } from '../domain/booklet.js';
+import { presetLayout } from '../domain/preset.js';
 import { parseTotalPagesInput } from '../schemas.js';
 
-// 総ページ数に応じた固定ページ構成のプレビュー（不正な値のときは案内文）
-export function renderFixedPreview(rawTotalPages) {
+// 標準構成の内容（総ページ数に応じた位置）のプレビュー。チェックが外れているとき・総ページ数が不正なときは案内文
+export function renderPresetPreview(rawTotalPages, enabled) {
+  if (!enabled) return '<p class="text-sm text-slate-500">標準構成はセットしません。全ページが空きの冊子として作成します。</p>';
   const parsed = parseTotalPagesInput(rawTotalPages);
   if (!parsed.success) {
-    return '<p class="text-sm text-slate-500">有効な総ページ数（8以上の4の倍数）を入力すると、固定ページ構成を表示します。</p>';
+    return '<p class="text-sm text-slate-500">有効な総ページ数（8以上の4の倍数）を入力すると、セットされる内容を表示します。</p>';
   }
-  const rows = fixedLayout(parsed.data)
+  const rows = presetLayout(parsed.data)
     .map((f) => `<li class="flex justify-between"><span>P${f.position}</span><span>${esc(f.name)}</span></li>`)
     .join('');
   return `<ul class="max-w-xs space-y-1 text-sm">${rows}</ul>`;
@@ -37,8 +38,12 @@ export function renderCreate(form) {
           <p class="text-xs text-slate-500">A4縦／左綴じ／中綴じ</p>
         </div>
         <div>
-          <p class="mb-1 text-sm font-medium">固定ページ構成</p>
-          <div data-fixed-preview>${renderFixedPreview(form.totalPages)}</div>
+          <label class="flex cursor-pointer items-center gap-2 text-sm font-medium">
+            <input type="checkbox" name="preset" class="h-4 w-4 rounded border-slate-300" ${form.preset ? 'checked' : ''} />
+            標準構成を最初にセットする
+          </label>
+          <p class="mt-1 text-xs text-slate-500">表紙・表紙裏・目次・裏表紙裏・裏表紙を、次の位置に1ページずつ配置します（作成後も自由に移動・削除できます）。</p>
+          <div class="mt-2" data-preset-preview>${renderPresetPreview(form.totalPages, form.preset)}</div>
         </div>
         <div class="flex flex-wrap gap-3">
           <button type="submit" class="${btnPrimary}">作成する</button>

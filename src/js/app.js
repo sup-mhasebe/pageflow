@@ -1,7 +1,7 @@
 import '../css/style.css';
 import * as store from './store.js';
 import { renderHome } from './ui/home.js';
-import { renderCreate, renderFixedPreview } from './ui/create.js';
+import { renderCreate, renderPresetPreview } from './ui/create.js';
 import { renderEditor } from './ui/editor.js';
 import { renderImportedViewer } from './ui/imported-viewer.js';
 import { renderModal, renderToast } from './ui/dialog.js';
@@ -12,7 +12,7 @@ import { captureViewState, restoreViewState } from './ui/view-state.js';
 const root = document.getElementById('app');
 
 // 新規冊子フォームの入力値（再描画しても入力が消えないよう保持）
-let createForm = { name: '', totalPages: '8', errors: {} };
+let createForm = { name: '', totalPages: '8', preset: true, errors: {} };
 
 // ---- 描画 ----
 function render(state) {
@@ -28,6 +28,15 @@ function render(state) {
   root.innerHTML = body + renderModal(state) + renderToast(state);
   restoreViewState(root, snap, viewKey);
   lastViewKey = viewKey;
+  // 編集開始などで要求された入力欄にフォーカスして全選択する（一度だけ）
+  const focusId = store.takeFocusRequest();
+  if (focusId) {
+    const el = root.querySelector(`#${CSS.escape(focusId)}`);
+    if (el) {
+      el.focus();
+      if (typeof el.select === 'function') el.select();
+    }
+  }
 }
 let lastViewKey = null;
 store.subscribe(render);
@@ -67,7 +76,7 @@ async function route() {
       }
       store.setRoute(r);
     } else if (r.name === 'new') {
-      createForm = { name: '', totalPages: '8', errors: {} };
+      createForm = { name: '', totalPages: '8', preset: true, errors: {} };
       store.setRoute(r);
     } else {
       await store.refreshBooklets();
@@ -108,6 +117,38 @@ root.addEventListener('click', async (e) => {
       case 'dismiss-import-error':
         store.dismissImportError();
         break;
+      case 'edit-name':
+        store.startNameEdit();
+        break;
+      case 'cancel-name-edit':
+        store.cancelNameEdit();
+        break;
+      case 'open-resize': {
+        const total = store.getState().current.booklet.totalPages;
+        store.setModal({ type: 'resize-pages', stage: 'input', value: String(total), error: null });
+        break;
+      }
+      case 'resize-step': {
+        // 4ずつ増減する（4の倍数でない入力は、次／前の4の倍数へ）。8未満にはしない
+        const st = store.getState();
+        const base = Number.parseInt(st.modal?.value, 10);
+        const cur = Number.isFinite(base) ? base : st.current.booklet.totalPages;
+        const dir = Number(el.dataset.dir);
+        const next = dir > 0 ? Math.floor(cur / 4) * 4 + 4 : Math.ceil(cur / 4) * 4 - 4;
+        store.patchModal({ value: String(Math.max(8, next)), error: null });
+        break;
+      }
+      case 'confirm-resize': {
+        const m = store.getState().modal;
+        const r = await store.resizeBookletAction(String(m.newTotalPages));
+        if (!r.ok) {
+          store.patchModal({ stage: 'input', value: String(m.newTotalPages), error: r.reason });
+          break;
+        }
+        store.setModal(null);
+        store.showToast(`総ページ数を${m.newTotalPages}Pに変更しました。`, 'success');
+        break;
+      }
       case 'open-viewer':
         go(`#/booklet/${encodeURIComponent(id)}/viewer`);
         break;
@@ -209,9 +250,10 @@ root.addEventListener('submit', async (e) => {
       case 'create': {
         const name = String(data.get('name') ?? '');
         const totalPages = String(data.get('totalPages') ?? '');
-        const result = await store.createBookletAction(name, totalPages);
+        const preset = data.get('preset') === 'on';
+        const result = await store.createBookletAction(name, totalPages, preset);
         if (!result.ok) {
-          createForm = { name, totalPages, errors: result.errors };
+          createForm = { name, totalPages, preset, errors: result.errors };
           render(store.getState());
           break;
         }
@@ -239,15 +281,28 @@ root.addEventListener('submit', async (e) => {
         else store.setModal(null);
         break;
       }
-      case 'rename': {
-        const r = await store.renameBookletAction(String(data.get('name') ?? ''));
-        if (!r.ok) store.showToast(r.reason, 'error');
+      case 'rename-booklet':
+        await store.commitNameEdit(String(data.get('name') ?? ''));
         break;
-      }
-      case 'resize': {
-        const r = await store.resizeBookletAction(String(data.get('totalPages') ?? ''));
-        if (!r.ok) store.showToast(r.reason, 'error');
-        else store.showToast('総ページ数を変更しました。', 'success');
+      case 'resize-pages': {
+        // 見積もり→（配置済みのページが削除される場合のみ）確認→変更
+        const raw = String(data.get('totalPages') ?? '');
+        const plan = store.planResizeAction(raw);
+        if (!plan.ok) {
+          store.patchModal({ value: raw, error: plan.reason });
+          break;
+        }
+        if (plan.needsConfirm) {
+          store.patchModal({ stage: 'confirm', plan, newTotalPages: plan.newTotalPages, error: null });
+          break;
+        }
+        const r = await store.resizeBookletAction(raw);
+        if (!r.ok) {
+          store.patchModal({ value: raw, error: r.reason });
+          break;
+        }
+        store.setModal(null);
+        store.showToast(`総ページ数を${plan.newTotalPages}Pに変更しました。`, 'success');
         break;
       }
     }
@@ -387,6 +442,14 @@ root.addEventListener('drop', async (e) => {
   }
 });
 
+// 冊子名のインライン編集：Escで取り消し（Enterはフォーム送信で確定）
+root.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && e.target.id === 'h-name') {
+    e.preventDefault();
+    store.cancelNameEdit();
+  }
+});
+
 // キーボードでもページカードを選択できるようにする
 root.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -394,6 +457,12 @@ root.addEventListener('keydown', (e) => {
   if (!card || card !== e.target) return;
   e.preventDefault();
   store.selectPage(Number(card.dataset.no));
+});
+
+// ---- 冊子名の編集中・総ページ数ポップアップの入力中：値を状態へ控える（再描画はしない） ----
+root.addEventListener('input', (e) => {
+  if (e.target.id === 'h-name') store.setNameDraft(e.target.value);
+  else if (e.target.id === 'r-total') store.setModalField('value', e.target.value);
 });
 
 // ---- コンテンツ追加フォームの入力中：値を保持（再描画で消えないように） ----
@@ -410,15 +479,18 @@ root.addEventListener('input', (e) => {
   }
 });
 
-// ---- 新規冊子フォームの入力中：エラー表示と固定ページ構成プレビューを更新 ----
+// ---- 新規冊子フォームの入力中：エラー表示と標準構成のプレビューを更新 ----
 root.addEventListener('input', (e) => {
   const form = e.target.closest('form[data-form="create"]');
   if (!form) return;
   const data = new FormData(form);
   const name = String(data.get('name') ?? '');
   const totalPages = String(data.get('totalPages') ?? '');
+  const preset = data.get('preset') === 'on';
+  if (e.target.name === 'totalPages' || e.target.name === 'preset') {
+    form.querySelector('[data-preset-preview]').innerHTML = renderPresetPreview(totalPages, preset);
+  }
   if (e.target.name === 'totalPages') {
-    form.querySelector('[data-fixed-preview]').innerHTML = renderFixedPreview(totalPages);
     const res = validateNewBooklet('x', totalPages);
     const msg = res.ok ? '' : (res.errors.totalPages ?? '');
     form.querySelector('[data-error-for="totalPages"]').innerHTML = msg
@@ -427,7 +499,7 @@ root.addEventListener('input', (e) => {
     const p = form.querySelector('[data-error-for="totalPages"] p');
     if (p) p.textContent = msg;
   }
-  createForm = { ...createForm, name, totalPages };
+  createForm = { ...createForm, name, totalPages, preset };
 });
 
 route();

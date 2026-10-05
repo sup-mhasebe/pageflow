@@ -21,7 +21,7 @@ const WEBP = (tag) => new Uint8Array([...strToU8('RIFF'), 0, 0, 0, 0, ...strToU8
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 
 function setup() {
-  const set = createBooklet('テスト冊子', 12);
+  const set = createBooklet('テスト冊子', 12, { preset: true });
   let state = { ...set, pdfAssets: [], renderImages: [] };
   const a = addContent(state, '特集', '2');
   state = { ...state, contents: [...state.contents, a.content] };
@@ -91,7 +91,7 @@ test('manifest：PDF登録済みページは画像ファイル、未登録ペー
   for (const n of [2, 3, 6, 7, 8, 9, 10, 11, 12]) assert.equal(f[n], null, `P${n}`);
 });
 
-test('manifest：コンテンツ名（固定ページ名・空き）と複数ページコンテンツの何ページ目か', () => {
+test('manifest：コンテンツ名（標準構成の名前・空き）と複数ページコンテンツの何ページ目か', () => {
   const { state, images } = setup();
   const m = manifestOf(createPackage(state, images).bytes);
   const byNo = Object.fromEntries(m.pages.map((p) => [p.pageNo, p]));

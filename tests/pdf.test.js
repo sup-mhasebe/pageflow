@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createBooklet, resizeBooklet } from '../src/js/domain/booklet.js';
+import { createBooklet, resizeBooklet, planResize } from '../src/js/domain/booklet.js';
 import { addContent, updateContent, deleteContent } from '../src/js/domain/content.js';
 import { placeContent, unplaceContent } from '../src/js/domain/placement.js';
 import {
@@ -14,9 +14,9 @@ import {
   PDF_IN_USE_MESSAGE,
 } from '../src/js/domain/pdf.js';
 
-// ---- 準備：12P冊子（固定 P1/P2/P3/P11/P12）、「特集」3Pを P4〜P6 に配置した状態 ----
+// ---- 準備：12P冊子（標準構成 P1/P2/P3/P11/P12）、「特集」3Pを P4〜P6 に配置した状態 ----
 function setup(requiredPages = 3, startNo = 4) {
-  const set = createBooklet('テスト冊子', 12);
+  const set = createBooklet('テスト冊子', 12, { preset: true });
   let state = { ...set, pdfAssets: [], renderImages: [] };
   const added = addContent(state, '特集', String(requiredPages));
   state = { ...state, contents: [...state.contents, added.content] };
@@ -158,7 +158,7 @@ test('A3分割後のページ数超過：1PコンテンツにA3横1ページ（�
   assert.match(r.reason, /2ページ.*1ページ/);
 });
 
-test('固定ページ（表紙）にもPDFを登録できる', () => {
+test('標準構成のコンテンツ（表紙）にもPDFを登録できる', () => {
   const { state } = setup();
   const cover = state.contents.find((c) => c.name === '表紙');
   const { r, state: s } = register(state, cover.id, ['a4']);
@@ -289,24 +289,38 @@ test('relinkPages：入力を変更せず、変化が無ければ同じページ
 });
 
 // ---- 総ページ数の縮小・コンテンツのページ数減少（PDF登録済みデータを暗黙に消さない）----
-test('総ページ数縮小：削除対象ページにPDFがあれば拒否（メッセージ確認）', () => {
+test('総ページ数縮小：PDF割り当て済みのページが削除される場合は確認が必要。承認すると配置だけが解除され、PDF素材は残る', () => {
   const { state, id } = setup(2, 9); // P9-P10
-  const { state: s1 } = register(state, id, ['a4']);
+  const { state: s1 } = register(state, id, ['a4', 'a4']);
+  const plan = planResize(s1, 8);
+  assert.equal(plan.ok, true);
+  assert.equal(plan.needsConfirm, true);
   const r = resizeBooklet(s1, 8);
-  assert.equal(r.ok, false);
-  assert.equal(r.reason, PDF_IN_USE_MESSAGE);
+  assert.equal(r.ok, true);
+  assert.equal(r.pages.length, 8);
+  assert.equal(r.pages.some((p) => p.contentId === id || p.renderImageId), false); // 配置と割り当ては解除
+  // PDF素材（PdfAsset / RenderImage）は state にそのまま残り、ゴミ箱や削除の指示も出ない
+  assert.equal(s1.pdfAssets.length, 1);
+  assert.equal(s1.renderImages.length, 2);
+  assert.equal(r.trashAssetIds, undefined);
+  assert.equal(r.deleteAssetIds, undefined);
+  // この冊子は標準構成入りのため、切れる P11・P12 の裏表紙裏・裏表紙も解除の対象に含まれる
+  assert.deepEqual(r.plan.affected.map((a) => a.name), ['特集', '裏表紙裏', '裏表紙']);
 });
 
-test('総ページ数縮小：PDF登録済みの固定ページ(裏表紙)が再配置される場合は拒否、増加でも拒否', () => {
+test('総ページ数の変更：標準構成の裏表紙（PDF付き）は、縮小では配置解除（確認あり）、増加ではそのまま', () => {
   const { state } = setup();
-  const back = state.contents.find((c) => c.name === '裏表紙');
+  const back = state.contents.find((c) => c.presetKey === 'backCover');
   const { state: s1 } = register(state, back.id, ['a4']);
-  const shrink = resizeBooklet(s1, 8);
-  assert.equal(shrink.ok, false);
-  assert.equal(shrink.reason, PDF_IN_USE_MESSAGE);
+  const shrink = planResize(s1, 8);
+  assert.equal(shrink.needsConfirm, true);
+  assert.deepEqual(shrink.affected.map((a) => a.name).sort(), ['裏表紙', '裏表紙裏'].sort());
   const grow = resizeBooklet(s1, 16);
-  assert.equal(grow.ok, false);
-  assert.equal(grow.reason, PDF_IN_USE_MESSAGE);
+  assert.equal(grow.ok, true);
+  assert.equal(planResize(s1, 16).needsConfirm, false);
+  // 増加しても、裏表紙は P12 のまま（自動では移動しない）。画像の割り当ても保たれる
+  assert.equal(grow.pages[11].contentId, back.id);
+  assert.equal(grow.pages[11].renderImageId, s1.pages[11].renderImageId);
 });
 
 test('総ページ数縮小：影響を受けないページ(表紙P1)のPDFは保持され、縮小できる', () => {

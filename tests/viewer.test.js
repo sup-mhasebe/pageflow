@@ -55,7 +55,7 @@ test('モード切替時もページを保てる：1ページ表示のP3 → 見
 
 // ---- 画面（HTML）----
 function sampleModel() {
-  const set = createBooklet('テスト冊子', 8);
+  const set = createBooklet('テスト冊子', 8, { preset: true });
   let state = { ...set, pdfAssets: [], renderImages: [] };
   const added = addContent(state, '特集', '2');
   state = { ...state, contents: [...state.contents, added.content] };
@@ -68,8 +68,8 @@ function sampleModel() {
 const view = (pageNo, over = {}) => ({ pageNo, showInfo: true, anim: null, ...over });
 const count = (html, re) => (html.match(re) ?? []).length;
 
-test('表示モデル：コンテンツ名（固定ページ名・①②・空き）が入る。編集データは変更されない', () => {
-  const set = createBooklet('テスト冊子', 8);
+test('表示モデル：コンテンツ名（標準構成の名前・①②・空き）が入る。編集データは変更されない', () => {
+  const set = createBooklet('テスト冊子', 8, { preset: true });
   const state = { ...set, pdfAssets: [], renderImages: [] };
   const before = JSON.stringify(state);
   const model = buildViewerModel(state);
@@ -103,7 +103,7 @@ test('画像があるページは<img>、無いページはプレースホルダ
   assert.equal(count(noImg, /PDF未登録/g), 2);
 });
 
-test('固定ページのプレースホルダーには固定ページ名を表示する', () => {
+test('標準構成のコンテンツ（裏表紙）のプレースホルダーにはコンテンツ名を表示する', () => {
   const m = sampleModel();
   const html = renderViewer(m, view(8), 'spread');
   assert.match(html, /裏表紙/);

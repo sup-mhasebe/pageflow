@@ -36,9 +36,6 @@ export function checkRange(state, content, startNo, requiredPages = content.requ
     const p = byNo.get(n);
     if (p?.contentId && p.contentId !== content.id) {
       const other = byId.get(p.contentId);
-      if (other?.isFixed) {
-        return { ok: false, reason: `P${n}は固定ページ（${other.name}）のため配置できません。` };
-      }
       return { ok: false, reason: `P${n}は「${other?.name ?? '別のコンテンツ'}」が使用中のため配置できません。` };
     }
   }
@@ -49,8 +46,6 @@ export function checkRange(state, content, startNo, requiredPages = content.requ
 export function placeContent(state, contentId, startNo) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, reason: 'コンテンツが見つかりません。' };
-  if (content.isFixed) return { ok: false, reason: '固定ページは配置・移動できません。' };
-
   const check = checkRange(state, content, startNo);
   if (!check.ok) return check;
 
@@ -75,7 +70,6 @@ export function placeContent(state, contentId, startNo) {
 export function unplaceContent(state, contentId) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, reason: 'コンテンツが見つかりません。' };
-  if (content.isFixed) return { ok: false, reason: '固定ページは配置解除できません。' };
   if (!isPlaced(state.pages, contentId)) return { ok: false, reason: 'このコンテンツは配置されていません。' };
   // 配置解除：冊子ページとの対応のみ外す。登録済みPDF（PdfAsset）はコンテンツに残る
   const pages = state.pages.map((p) =>
