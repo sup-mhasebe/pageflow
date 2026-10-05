@@ -88,6 +88,21 @@ export async function saveBookletRecords({
 }) {
   const db = await openDb();
   const tx = db.transaction(Object.keys(STORE_DEFS), 'readwrite');
+  // 途中で例外が起きても、途中までの書き込みがコミットされないよう、必ずトランザクション全体を中止する（全か無か）
+  try {
+    await writeAll(tx, { booklet, contents, pages, removedPageIds, removedContentIds, putPdfAssets, putRenderImages, trashAssetIds, deleteAssetIds });
+    await finished(tx);
+  } catch (error) {
+    try {
+      tx.abort();
+    } catch {
+      // すでに終了している場合は何もしない
+    }
+    throw error;
+  }
+}
+
+async function writeAll(tx, { booklet, contents, pages, removedPageIds, removedContentIds, putPdfAssets, putRenderImages, trashAssetIds, deleteAssetIds }) {
   tx.objectStore('booklets').put(booklet);
   for (const c of contents) tx.objectStore('contents').put(c);
   for (const p of pages) tx.objectStore('pages').put(p);
@@ -110,7 +125,6 @@ export async function saveBookletRecords({
     await deleteAssetCascade(tx, id);
   }
   for (const id of deleteAssetIds) await deleteAssetCascade(tx, id);
-  await finished(tx);
 }
 
 // 冊子のPDF関連レコードを読み出す。PdfAsset は元PDFのBlobを除いたメタ情報のみ返す

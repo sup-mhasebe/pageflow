@@ -36,8 +36,19 @@ function renderA3Section(m) {
   const rows = a3
     .map((i) => {
       const url = m.previews[i.pageNumber];
+      const fb = m.fallbacks?.[i.pageNumber];
       const first = startIndex.get(i.pageNumber);
-      const body = url
+      // 全体プレビューを作れなかったページ：左右の分割結果（実際に生成した画像）を見せて確認してもらう
+      const fallbackBody = fb
+        ? `<p class="mb-1 rounded bg-amber-50 p-2 text-xs text-amber-800" data-preview-failed>全体プレビューを表示できませんでした。左右に分割した結果を確認してください。</p>
+           <div class="grid grid-cols-2 gap-2" data-split-thumbs>
+             <figure class="m-0 overflow-hidden rounded border border-slate-300"><img src="${fb.left}" alt="左側の分割画像" class="block w-full" /><figcaption class="bg-slate-100 px-2 py-1 text-center text-xs">左側 → 先のA4ページ（${target(first)}）</figcaption></figure>
+             <figure class="m-0 overflow-hidden rounded border border-slate-300"><img src="${fb.right}" alt="右側の分割画像" class="block w-full" /><figcaption class="bg-slate-100 px-2 py-1 text-center text-xs">右側 → 次のA4ページ（${target(first + 1)}）</figcaption></figure>
+           </div>`
+        : null;
+      const body = fallbackBody
+        ? fallbackBody
+        : url
         ? `<div class="relative overflow-hidden rounded border border-slate-300">
             <img src="${url}" alt="A3ページ全体のプレビュー" class="block w-full" />
             <div class="pointer-events-none absolute inset-y-0 left-1/2 w-0 border-l-2 border-dashed border-red-500" data-split-line></div>
@@ -91,7 +102,17 @@ export function renderPdfImportModal(m) {
       '',
     );
   }
-  if (m.stage === 'error') return frame(alertBox('bg-red-50 text-red-700', m.message), cancel);
+  if (m.stage === 'error') {
+    // 原因ごとの見出しと文言。実際の例外名・内容は「技術情報」に出す（個人情報は含めない）
+    const title = m.title ? `<p class="mb-1 text-sm font-semibold text-red-800" data-error-title>${esc(m.title)}</p>` : '';
+    const detail = m.detail
+      ? `<details class="mt-2 text-xs text-slate-600"><summary class="cursor-pointer">技術情報</summary><pre class="mt-1 whitespace-pre-wrap break-all rounded bg-slate-100 p-2" data-error-detail>${esc(m.detail)}</pre></details>`
+      : '';
+    return frame(
+      `<div class="rounded bg-red-50 p-3 text-sm text-red-700" role="alert" data-error-kind="${esc(m.kind ?? 'unknown')}">${title}<p>${esc(m.message)}</p></div>${detail}`,
+      cancel,
+    );
+  }
 
   // stage === 'ready'
   const alerts = [];

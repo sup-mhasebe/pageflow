@@ -15,6 +15,7 @@ import { addContent, updateContent, deleteContent, sortContents } from './domain
 import { placeContent, unplaceContent, startPageOf } from './domain/placement.js';
 import { assetOfContent, buildRegistration, buildUnregister, checkPageCount, convertedPageCount } from './domain/pdf.js';
 import * as pdf from './pdf.js';
+import { classifyPdfError, describeError } from './domain/pdf-errors.js';
 import { clearImages, removeImages, setImage } from './images.js';
 import { buildScreens, neighborIndex, screenIndexOf } from './domain/viewer.js';
 import { createPackage, readPackage, safeFileName } from './pageflow-file.js';
@@ -207,6 +208,9 @@ export async function openBooklet(id) {
 
 export function closeBooklet() {
   clearImages();
+  // 取り込み画面を開いたまま画面遷移した場合も、PDF.js のリソースを解放してモーダルを閉じる
+  disposeImportSession();
+  if (state.modal?.type === 'pdf-import') state.modal = null;
   state.current = null;
   state.nameEdit = null;
   state.selectedPageNo = null;
@@ -410,18 +414,42 @@ export async function deleteBookletAction(id) {
 // ---------------------------------------------------------------------------
 // PDF登録（コンテンツ単位）。PDFの解析・画像生成はすべてブラウザ内で行い、外部へは送信しない
 // ---------------------------------------------------------------------------
-let importSession = null; // { token, file, contentId, doc, previewUrls }
+let importSession = null; // { token, file, contentId, handle, urls, precomputed }
 
+// PDF.js のリソース（loading task と Web Worker、展開済みの画像データ）だけを解放する。何度呼んでも安全。
+// 画像の生成が済んだ後や、失敗した後に、すぐ使う。解放の完了は待たない（失敗しても無視する）。
+function releaseHandle(sess) {
+  const handle = sess.handle;
+  sess.handle = null;
+  if (handle) void pdf.closePdf(handle);
+}
+
+// 取り込みセッションの後片付け：PDF.js のリソースと、プレビュー用のObject URLをすべて解放する。
+// キャンセル・登録完了・エラー終了・PDF差し替え・画面遷移のすべてで使う。何度呼んでも安全。
 function disposeImportSession() {
-  if (!importSession) return;
-  for (const u of importSession.previewUrls) URL.revokeObjectURL(u);
-  importSession.doc?.destroy?.();
+  const sess = importSession;
+  if (!sess) return;
   importSession = null;
+  for (const u of sess.urls) URL.revokeObjectURL(u);
+  releaseHandle(sess);
 }
 
 const isCurrentSession = (token) => importSession?.token === token;
 
+// 失敗を原因ごとに分類して表示し、PDF.js のリソースを解放する。
+// 実際の例外名・内容は、コンソールと画面の「技術情報」に残す。キャンセル済みの取り込みの例外は無視する。
+function failImport(token, error, stage, context) {
+  if (!isCurrentSession(token)) return;
+  const info = classifyPdfError(error, stage, context);
+  const d = describeError(error);
+  console.error('[PageFlow][PDF]', { kind: info.kind, stage, name: d.name, message: d.message, code: d.code, stack: d.stack });
+  patchModal({ stage: 'error', kind: info.kind, title: info.title, message: info.message, detail: info.detail });
+  disposeImportSession();
+}
+
 // ファイル選択後の解析：サイズ判定→変換後ページ数の照合→A3分割プレビュー生成。登録の確定は confirmPdfImport で行う
+//  - A3の全体プレビューだけが失敗した場合は、左右の分割画像を生成して見せる（確認できれば登録できる）。
+//    分割画像も生成できない、または表示できない場合は、登録できない（何も保存しない）。
 export async function startPdfImport(contentId, file) {
   const cur = state.current;
   const content = cur.contents.find((c) => c.id === contentId);
@@ -432,7 +460,7 @@ export async function startPdfImport(contentId, file) {
   }
   disposeImportSession();
   const token = Symbol('pdf-import');
-  importSession = { token, file, contentId, doc: null, previewUrls: [] };
+  importSession = { token, file, contentId, handle: null, urls: [], precomputed: new Map() };
   const existing = assetOfContent(cur, contentId);
   state.modal = {
     type: 'pdf-import',
@@ -447,29 +475,59 @@ export async function startPdfImport(contentId, file) {
   };
   notify();
 
+  let stage = 'open';
+  let inFallback = false;
+  let handle = null;
   try {
-    const doc = await pdf.openPdf(file);
+    handle = await pdf.openPdf(file);
     if (!isCurrentSession(token)) {
-      doc.destroy();
+      await pdf.closePdf(handle); // 読み込み中にキャンセルされた
       return;
     }
-    importSession.doc = doc;
-    const items = await pdf.analyzePdf(doc);
+    importSession.handle = handle;
+    stage = 'analyze';
+    const items = await pdf.analyzePdf(handle.doc);
     const unsupported = items.filter((i) => !i.kind);
     const converted = convertedPageCount(items.filter((i) => i.kind).map((i) => i.kind));
     const count = unsupported.length === 0 ? checkPageCount(converted, content.requiredPages) : null;
 
     // A3横ページの分割確認用プレビュー（A3全体の画像）。多数ある場合は先頭8ページ分のみ
     const previews = {};
+    const fallbacks = {}; // 全体プレビューを作れなかったA3ページの、左右の分割サムネイル
     if (unsupported.length === 0) {
       for (const item of items.filter((i) => i.kind === 'a3').slice(0, 8)) {
-        const url = await pdf.renderPreviewUrl(doc, item.pageNumber);
+        const n = item.pageNumber;
+        stage = 'preview';
+        let url = null;
+        try {
+          url = await pdf.renderPreviewUrl(handle.doc, n);
+        } catch (previewError) {
+          if (!isCurrentSession(token)) return;
+          console.warn('[PageFlow][PDF] A3の全体プレビューを生成できませんでした。左右の分割画像の生成を試みます。', describeError(previewError));
+        }
         if (!isCurrentSession(token)) {
-          URL.revokeObjectURL(url);
+          if (url) URL.revokeObjectURL(url);
           return;
         }
-        importSession.previewUrls.push(url);
-        previews[item.pageNumber] = url;
+        if (url) {
+          importSession.urls.push(url);
+          previews[n] = url;
+          continue;
+        }
+        // フォールバック：左右の分割画像を生成し、ブラウザが実際に表示できることを確かめてからユーザーに見せる
+        stage = 'convert';
+        inFallback = true;
+        const pieces = await pdf.renderSplitPair(handle.doc, n);
+        for (const p of pieces) {
+          if (!(await pdf.canDecode(p.imageBlob))) throw new pdf.ImageEncodeError('生成した分割画像を表示できませんでした。');
+        }
+        if (!isCurrentSession(token)) return;
+        importSession.precomputed.set(n, pieces); // 登録の確定時に、同じ画像をそのまま使う（二重に生成しない）
+        const left = URL.createObjectURL(pieces[0].imageBlob);
+        const right = URL.createObjectURL(pieces[1].imageBlob);
+        importSession.urls.push(left, right);
+        fallbacks[n] = { left, right };
+        inFallback = false;
       }
     }
     if (!isCurrentSession(token)) return;
@@ -479,22 +537,19 @@ export async function startPdfImport(contentId, file) {
       unsupported,
       converted,
       previews,
+      fallbacks,
       canRegister: !!count?.ok,
       countError: count && !count.ok ? count.reason : null,
       shortage: count?.ok ? count.shortage : 0,
     });
   } catch (e) {
-    console.error(e);
-    if (isCurrentSession(token)) {
-      patchModal({
-        stage: 'error',
-        message: 'PDFを読み込めませんでした。PDFファイルが破損している、またはパスワードで保護されている可能性があります。',
-      });
-    }
+    if (handle && !isCurrentSession(token)) await pdf.closePdf(handle); // キャンセル後の例外でも、確実に解放する
+    failImport(token, e, stage, { a3Fallback: inFallback });
   }
 }
 
-// 登録の確定：表示用画像を生成し、PdfAsset / RenderImage / ページとの対応を1トランザクションで保存する
+// 登録の確定：表示用画像を生成し、PdfAsset / RenderImage / ページとの対応を1トランザクションで保存する。
+// 画像の生成が済んだ時点で、PDF.js のリソースを解放する（以降はPDF.jsを使わない）。
 export async function confirmPdfImport() {
   const m = state.modal;
   const sess = importSession;
@@ -503,11 +558,18 @@ export async function confirmPdfImport() {
     showToast('差し替え方法（ゴミ箱へ移動／完全削除）を選択してください。', 'error');
     return;
   }
+  const token = sess.token;
   patchModal({ stage: 'converting', progress: { done: 0, total: m.converted } });
+  let stage = 'convert';
   try {
-    const converted = await pdf.renderConvertedPages(sess.doc, m.items, (done, total) =>
-      patchModal({ progress: { done, total } }),
+    const converted = await pdf.renderConvertedPages(
+      sess.handle.doc,
+      m.items,
+      (done, total) => patchModal({ progress: { done, total } }),
+      sess.precomputed,
     );
+    releaseHandle(sess); // 画像の生成が済んだら、PDF.js のリソースをすぐ解放する
+    stage = 'save';
     const cur = state.current;
     const r = buildRegistration(cur, m.contentId, {
       fileName: m.fileName,
@@ -516,7 +578,8 @@ export async function confirmPdfImport() {
       replaceMode: m.replaceMode,
     });
     if (!r.ok) {
-      patchModal({ stage: 'error', message: r.reason });
+      patchModal({ stage: 'error', kind: 'unknown', title: '登録できませんでした', message: r.reason, detail: '' });
+      disposeImportSession();
       return;
     }
     await commitCurrent({
@@ -529,7 +592,7 @@ export async function confirmPdfImport() {
       deleteAssetIds: r.deleteAssetIds,
       removedImageIds: r.removedImageIds,
     });
-    setModal(null);
+    setModal(null); // 取り込みセッションを解放する
     showToast(
       r.shortage > 0
         ? `PDFを登録しました（不足の${r.shortage}ページは「PDF未登録」のままです）。`
@@ -537,8 +600,7 @@ export async function confirmPdfImport() {
       'success',
     );
   } catch (e) {
-    console.error(e);
-    patchModal({ stage: 'error', message: 'PDFの変換または保存に失敗しました。' });
+    failImport(token, e, stage);
   }
 }
 
