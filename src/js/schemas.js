@@ -96,6 +96,7 @@ export const contentRecordSchema = z.object({
   requiredPages: z.number().int().min(1),
   isFixed: z.boolean().optional(),
   presetKey: z.enum(PRESET_KEYS).optional(),
+  colorIndex: z.number().int().min(0).optional(), // 識別色の番号（作成時に保存。旧データには無い）
 });
 
 export const pageRecordSchema = z.object({

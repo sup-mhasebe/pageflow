@@ -51,21 +51,47 @@ export function placeContent(state, contentId, startNo) {
   const currentStart = startPageOf(state.pages, contentId);
   if (currentStart === startNo) return { ok: true, pages: state.pages, unchanged: true };
 
-  const end = startNo + content.requiredPages - 1;
-  // 移動：コンテンツ内の何ページ目か（contentPageIndex）ごとに、割り当て済みの素材を新しい位置へ引き継ぐ
-  const carried = new Map();
+  // 移動：コンテンツ内の相対位置を保ち、各ページの内容一式（順序・割り当て）を新しい位置へ引き継ぐ
+  const offset = new Map();
   for (const p of state.pages) {
-    if (p.contentId === contentId && p.renderImageId) carried.set(p.contentPageIndex, { pdfAssetId: p.pdfAssetId, renderImageId: p.renderImageId });
+    if (p.contentId === contentId && currentStart !== null) {
+      offset.set(p.physicalPageNumber - currentStart, { contentPageIndex: p.contentPageIndex, pdfAssetId: p.pdfAssetId, renderImageId: p.renderImageId });
+    }
   }
+  const end = startNo + content.requiredPages - 1;
   const cleared = state.pages.map((p) =>
     p.contentId === contentId ? { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null } : p,
   );
   const pages = cleared.map((p) => {
     if (p.physicalPageNumber < startNo || p.physicalPageNumber > end) return p;
-    const index = p.physicalPageNumber - startNo;
-    return { ...p, contentId, contentPageIndex: index, ...(carried.get(index) ?? {}) };
+    const rel = p.physicalPageNumber - startNo;
+    return { ...p, contentId, ...(offset.get(rel) ?? { contentPageIndex: rel }) };
   });
   return { ok: true, pages, moved: currentStart !== null };
+}
+
+// ---- ページの入れ替え（swap）----
+// 中央ビューで、物理ページを別の物理ページへドラッグしたときの動作。空きページへ自動で逃がさず、ドロップ先と内容一式を交換する。
+// 交換するもの：Content・Content内のページ順（contentPageIndex）・割り当て（renderImageId／pdfAssetId）。
+// 交換後に、関わるContentの配置が連続した範囲でなくなる場合は拒否する（元の状態を変えない）。
+const SWAP_KEYS = ['contentId', 'contentPageIndex', 'pdfAssetId', 'renderImageId'];
+
+export function swapPages(state, fromNo, toNo) {
+  const a = state.pages.find((p) => p.physicalPageNumber === fromNo);
+  const b = state.pages.find((p) => p.physicalPageNumber === toNo);
+  if (!a || !b) return { ok: false, reason: '入れ替え先のページが不正です。' };
+  if (a === b || (!a.contentId && !b.contentId)) return { ok: true, pages: state.pages, unchanged: true };
+  const pick = (p) => Object.fromEntries(SWAP_KEYS.map((k) => [k, p[k]]));
+  const pages = state.pages.map((p) => (p === a ? { ...p, ...pick(b) } : p === b ? { ...p, ...pick(a) } : p));
+  for (const id of new Set([a.contentId, b.contentId].filter(Boolean))) {
+    const nums = pages.filter((p) => p.contentId === id).map((p) => p.physicalPageNumber).sort((x, y) => x - y);
+    const contiguous = nums.every((n, i) => i === 0 || n === nums[i - 1] + 1);
+    if (!contiguous) {
+      const c = state.contents.find((x) => x.id === id);
+      return { ok: false, reason: `P${fromNo}とP${toNo}を入れ替えると、「${c?.name ?? 'コンテンツ'}」のページが連続しなくなるため入れ替えできません。` };
+    }
+  }
+  return { ok: true, pages };
 }
 
 // 配置解除：コンテンツが占有する全ページを解除する（コンテンツ自体は残す）

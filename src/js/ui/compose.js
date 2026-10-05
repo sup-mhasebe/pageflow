@@ -2,6 +2,7 @@ import { esc, btnSecondary, btnDanger, btnPrimary, inputCls, circled } from './u
 import { placementPages, placementLabel, pdfSummary, pdfSummaryLabel, materialCountLabel } from '../domain/content-info.js';
 import { presetStatus } from '../domain/preset.js';
 import { assetOfContent } from '../domain/pdf.js';
+import { contentColor } from '../domain/content-color.js';
 import { assignmentMap, materialName, materialsOf, pageState, planSequentialAssign, resolveMaterialContentId } from '../domain/assignment.js';
 import { getImageUrl } from '../images.js';
 import { formatDateTime } from './util.js';
@@ -36,7 +37,9 @@ function renderContentList(cur, draft) {
       const unplace = placed
         ? `<button type="button" class="${btnSecondary} !px-2 !py-1 !text-xs" data-action="unplace-content" data-id="${esc(c.id)}">配置を解除</button>`
         : '';
-      return `<li class="rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm" draggable="true" data-drag-content="${esc(c.id)}" data-content-card="${esc(c.id)}">
+      // Contentの識別色（標準構成はpresetKeyによるグレー）。中央のページカードと同じ色
+      const col = contentColor(contents, c);
+      return `<li class="rounded border-2 px-3 py-2 text-sm" style="background:${col.bg};border-color:${col.border}" data-content-color="${col.key}" draggable="true" data-drag-content="${esc(c.id)}" data-content-card="${esc(c.id)}">
         <div class="flex items-start justify-between gap-2">
           <span class="min-w-0 cursor-grab font-medium [overflow-wrap:anywhere]">${esc(c.name)}</span>
           <span class="shrink-0 text-xs text-slate-600" data-required-pages>${c.requiredPages}P</span>
@@ -101,8 +104,13 @@ function renderPageCards(cur, selectedNo) {
           ? `<img src="${url}" alt="P${p.physicalPageNumber}のページ画像" class="h-full w-full object-contain" draggable="false" />`
           : STATE_TEXT[st];
       const stateCls = st === 'unassigned' ? 'text-amber-700' : 'text-slate-400';
-      const bg = c ? 'bg-indigo-50' : 'bg-white border border-dashed border-slate-300';
-      const drag = c ? `draggable="true" data-drag-content="${esc(c.id)}"` : '';
+      // 所属Contentの色は、ページ枠・背景・ラベルで示す（画像には色を重ねない）
+      const col = c ? contentColor(contents, c) : null;
+      const bg = c ? '' : 'bg-white border border-dashed border-slate-300';
+      const thumbStyle = c ? 'style="background:rgba(255,255,255,.6)"' : '';
+      const cardStyle = c ? `style="background:${col.bg};border-color:${col.border}" data-content-color="${col.key}"` : '';
+      // ページ同士の入れ替え（swap）用。内容のあるページだけドラッグできる
+      const drag = c ? `draggable="true" data-drag-page="${p.physicalPageNumber}"` : '';
       // 割り当ての解除：PCではhover/focus時に表示、タッチ環境では常時表示
       const unassign =
         st === 'image'
@@ -112,9 +120,9 @@ function renderPageCards(cur, selectedNo) {
           : '';
       return `
         <li class="group relative">
-          <div role="button" tabindex="0" data-action="select-page" data-no="${p.physicalPageNumber}" data-drop-page="${p.physicalPageNumber}" data-page-state="${st}" ${drag}
-            class="block w-full cursor-pointer rounded-lg bg-white p-2 text-left shadow-sm ${ring} hover:ring-indigo-300">
-            <div class="page-thumb flex items-center justify-center overflow-hidden rounded ${bg} text-xs ${stateCls}" data-page-thumb>${thumb}</div>
+          <div role="button" tabindex="0" data-action="select-page" data-no="${p.physicalPageNumber}" data-drop-page="${p.physicalPageNumber}" data-page-state="${st}" ${drag} ${cardStyle}
+            class="block w-full cursor-pointer rounded-lg border-2 ${c ? '' : 'border-transparent bg-white'} p-2 text-left shadow-sm ${ring} hover:ring-indigo-300">
+            <div class="page-thumb flex items-center justify-center overflow-hidden rounded ${bg} text-xs ${stateCls}" ${thumbStyle} data-page-thumb>${thumb}</div>
             <div class="mt-2 flex items-center justify-between gap-1">
               <span class="text-sm font-semibold">P${p.physicalPageNumber}</span>
             </div>

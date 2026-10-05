@@ -20,8 +20,9 @@ let createForm = { name: '', totalPages: '8', preset: true, errors: {} };
 // そのため、ドラッグ中の再描画は保留し、ドラッグが終わってから1回だけ行う。
 let draggingContentId = null; // コンテンツ（左カラム／配置済みページ）をドラッグ中
 let draggingImageId = null; // 右カラムのPDF素材をドラッグ中
+let draggingPageNo = null; // 中央ビューのページをドラッグ中（ドロップ先のページと入れ替える）
 let renderDeferred = false;
-const isDragging = () => !!(draggingContentId || draggingImageId);
+const isDragging = () => !!(draggingContentId || draggingImageId || draggingPageNo);
 function flushRender() {
   if (!renderDeferred) return;
   renderDeferred = false;
@@ -458,6 +459,15 @@ root.addEventListener('dragstart', (e) => {
     e.dataTransfer.setData('text/plain', draggingImageId);
     return;
   }
+  const pg = e.target.closest('[data-drag-page]');
+  if (pg) {
+    draggingPageNo = Number(pg.dataset.dragPage);
+    draggingContentId = null;
+    draggingImageId = null;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', `page:${draggingPageNo}`);
+    return;
+  }
   const el = e.target.closest('[data-drag-content]');
   if (!el) return;
   draggingContentId = el.dataset.dragContent;
@@ -467,7 +477,7 @@ root.addEventListener('dragstart', (e) => {
 
 root.addEventListener('dragover', (e) => {
   const card = e.target.closest('[data-drop-page]');
-  if (!card || (!draggingContentId && !draggingImageId)) return;
+  if (!card || (!draggingContentId && !draggingImageId && !draggingPageNo)) return;
   e.preventDefault(); // ドロップを許可（可否の判定はドロップ時に行う）
   if (card !== hoverCard) {
     clearHover();
@@ -475,7 +485,15 @@ root.addEventListener('dragover', (e) => {
     // 配置・割り当てできるかどうかを枠色で事前に示す（緑=可、赤=不可）
     const st = store.getState().current;
     let ok;
-    if (draggingImageId) {
+    if (draggingPageNo) {
+      // 入れ替えできるか（自分自身の上は何も起きない）
+      const to = Number(card.dataset.dropPage);
+      if (to === draggingPageNo) {
+        hoverCard = card;
+        return;
+      }
+      ok = store.canSwapPages(draggingPageNo, to);
+    } else if (draggingImageId) {
       ok = checkAssign(st, draggingImageId, Number(card.dataset.dropPage)).ok;
     } else {
       const content = st.contents.find((c) => c.id === draggingContentId);
@@ -492,21 +510,30 @@ root.addEventListener('dragleave', (e) => {
 root.addEventListener('dragend', () => {
   draggingContentId = null;
   draggingImageId = null;
+  draggingPageNo = null;
   clearHover();
   flushRender();
 });
 
 root.addEventListener('drop', async (e) => {
   const card = e.target.closest('[data-drop-page]');
-  if (!card || (!draggingContentId && !draggingImageId)) return;
+  if (!card || (!draggingContentId && !draggingImageId && !draggingPageNo)) return;
   e.preventDefault();
   const contentId = draggingContentId;
   const imageId = draggingImageId;
+  const fromPage = draggingPageNo;
   draggingContentId = null;
   draggingImageId = null;
+  draggingPageNo = null;
   clearHover();
   flushRender();
   try {
+    if (fromPage) {
+      // ページ同士の入れ替え。拒否時は何も変更せず（別の空きページへも動かさず）理由を警告する
+      const r = await store.swapPagesAction(fromPage, Number(card.dataset.dropPage));
+      if (!r.ok) store.showToast(r.reason, 'error');
+      return;
+    }
     if (imageId) {
       // PDF素材の割り当て。拒否時は何も変更せず、理由を警告する
       const r = await store.assignImageAction(imageId, Number(card.dataset.dropPage));

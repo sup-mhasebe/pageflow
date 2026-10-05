@@ -1,6 +1,7 @@
 import { validateContentInput } from '../schemas.js';
 import { checkRange, isPlaced, startPageOf, unplaceContent } from './placement.js';
 import { assetOfContent } from './pdf.js';
+import { nextColorIndex } from './content-color.js';
 
 // ユーザーコンテンツのID。IndexedDB はキー順で返すため、作成順に並ぶよう時刻プレフィックスを付ける
 // 同一ミリ秒に複数作成しても順序が逆転しないよう、前回値より必ず大きくする
@@ -38,6 +39,7 @@ export function addContent(state, rawName, rawRequiredPages) {
     name: v.data.name,
     requiredPages: v.data.requiredPages,
     isFixed: false,
+    colorIndex: nextColorIndex(state.contents),
   };
   return { ok: true, content };
 }
@@ -63,12 +65,22 @@ export function updateContent(state, contentId, rawName, rawRequiredPages) {
           ? { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null }
           : p,
       );
+      // ページの入れ替え（swap）で順序が変わっていても、残るページの順序（ordinal）は保ったまま 0..n-1 に詰め直す
+      const rank = new Map(
+        pages
+          .filter((p) => p.contentId === contentId)
+          .sort((x, y) => x.contentPageIndex - y.contentPageIndex)
+          .map((p, i) => [p.id, i]),
+      );
+      pages = pages.map((p) => (rank.has(p.id) ? { ...p, contentPageIndex: rank.get(p.id) } : p));
     } else {
       const check = checkRange(state, content, start, requiredPages);
       if (!check.ok) return { ok: false, errors: { requiredPages: `ページ数を増やせません。${check.reason}` } };
+      // 既存のページの順序（ordinal）・割り当ては変えず、新しく加わるページに続きの番号を付ける
+      let nextIndex = content.requiredPages;
       pages = pages.map((p) =>
-        p.physicalPageNumber >= start && p.physicalPageNumber <= end
-          ? { ...p, contentId, contentPageIndex: p.physicalPageNumber - start }
+        p.physicalPageNumber >= start && p.physicalPageNumber <= end && p.contentId !== contentId
+          ? { ...p, contentId, contentPageIndex: nextIndex++ }
           : p,
       );
     }

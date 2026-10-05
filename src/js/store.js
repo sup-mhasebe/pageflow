@@ -12,7 +12,7 @@ import {
 import { createBooklet, planResize, resizeBooklet } from './domain/booklet.js';
 import { normalizeContent, presetStatus, applyPreset } from './domain/preset.js';
 import { addContent, updateContent, deleteContent, sortContents } from './domain/content.js';
-import { placeContent, unplaceContent, startPageOf } from './domain/placement.js';
+import { placeContent, unplaceContent, startPageOf, swapPages } from './domain/placement.js';
 import { assetOfContent, assignedCount, buildRegistration, buildUnregister, convertedPageCount } from './domain/pdf.js';
 import { assignImage, assignSequentially, planSequentialAssign, repairAssignments, resolveMaterialContentId, unassignPage } from './domain/assignment.js';
 import * as pdf from './pdf.js';
@@ -432,6 +432,17 @@ export async function placeContentAction(contentId, startNo) {
   await commitCurrent({ contents: cur.contents, pages: r.pages });
   return r;
 }
+
+// 中央ビューのページ同士の入れ替え（swap）。拒否時は何も変更せず理由を返す
+export async function swapPagesAction(fromNo, toNo) {
+  const cur = state.current;
+  const r = swapPages(cur, fromNo, toNo);
+  if (!r.ok || r.unchanged) return r;
+  await commitCurrent({ contents: cur.contents, pages: r.pages });
+  return r;
+}
+
+export const canSwapPages = (fromNo, toNo) => swapPages(state.current, fromNo, toNo).ok;
 
 export async function unplaceContentAction(contentId) {
   const cur = state.current;

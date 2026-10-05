@@ -101,7 +101,7 @@ export function assignSequentially(state, contentId) {
 // データ整合性の検査（違反の一覧を返す。空配列なら整合している）
 //  1. 割り当て済みの素材は、そのページのコンテンツに属するPDFの素材であること
 //  2. 1つの素材が、同時に複数のページへ割り当てられていないこと
-//  3. コンテンツの配置は、必要ページ数分の連続したページであること
+//  3. コンテンツの配置は、必要ページ数分の連続したページで、ページ順（ordinal）が欠けも重複もないこと
 //  4. 素材が割り当てられているページには、コンテンツが存在すること
 export function findIntegrityIssues(state) {
   const issues = [];
@@ -123,6 +123,8 @@ export function findIntegrityIssues(state) {
     const nums = state.pages.filter((p) => p.contentId === c.id).map((p) => p.physicalPageNumber).sort((a, b) => a - b);
     if (nums.length === 0) continue;
     const contiguous = nums.every((n, i) => i === 0 || n === nums[i - 1] + 1);
+    const ordinals = state.pages.filter((p) => p.contentId === c.id).map((p) => p.contentPageIndex).sort((x, y) => x - y);
+    if (!ordinals.every((o, i) => o === i)) issues.push({ rule: 3, pageNo: nums[0], reason: `「${c.name}」のページ順が 0〜${nums.length - 1} の並びになっていません。` });
     if (!contiguous || nums.length !== c.requiredPages) issues.push({ rule: 3, pageNo: nums[0], reason: `「${c.name}」の配置が、必要ページ数分の連続したページではありません。` });
   }
   return issues;
