@@ -10,7 +10,7 @@ import {
   parseTotalPagesInput,
 } from './schemas.js';
 import { createBooklet, planResize, resizeBooklet } from './domain/booklet.js';
-import { normalizeContent } from './domain/preset.js';
+import { normalizeContent, presetStatus, applyPreset } from './domain/preset.js';
 import { addContent, updateContent, deleteContent, sortContents } from './domain/content.js';
 import { placeContent, unplaceContent, startPageOf } from './domain/placement.js';
 import { assetOfContent, buildRegistration, buildUnregister, checkPageCount, convertedPageCount } from './domain/pdf.js';
@@ -329,6 +329,41 @@ export async function updateContentAction(id, rawName, rawRequiredPages) {
     pages: r.pages,
   });
   return { ok: true };
+}
+
+// ---- 標準構成のセット（既存の冊子にも使える）----
+export function openPresetDialog() {
+  if (!state.current) return;
+  // 既定では、選べる項目をすべてチェックしておく
+  const selected = presetStatus(state.current).filter((s) => s.selectable).map((s) => s.key);
+  setModal({ type: 'preset', selected });
+}
+
+export function togglePresetKey(key, checked) {
+  const m = state.modal;
+  if (!m || m.type !== 'preset') return;
+  const set = new Set(m.selected);
+  if (checked) set.add(key);
+  else set.delete(key);
+  patchModal({ selected: [...set] });
+}
+
+// 選択した項目を、1回の保存でセットする。標準位置が使えない項目は、既存の配置を動かさずスキップして理由を返す
+export async function confirmPreset() {
+  const m = state.modal;
+  if (!m || m.type !== 'preset') return;
+  const cur = state.current;
+  const r = applyPreset(cur, m.selected);
+  if (r.applied.length > 0) {
+    await commitCurrent({ contents: r.contents, pages: r.pages });
+  }
+  setModal(null);
+  const skipped = r.skipped.length ? `（${r.skipped.map((x) => `${x.name}：${x.reason}`).join('、')}はスキップしました）` : '';
+  if (r.applied.length === 0) {
+    showToast(`標準構成はセットされませんでした。${skipped}`, 'error');
+  } else {
+    showToast(`標準構成を${r.applied.length}件セットしました。${skipped}`, r.skipped.length ? 'info' : 'success');
+  }
 }
 
 // 削除（配置済みの場合の確認は UI 側で必ず取る）

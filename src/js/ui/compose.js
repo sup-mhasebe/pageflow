@@ -1,4 +1,6 @@
 import { esc, btnSecondary, btnDanger, btnPrimary, inputCls, circled } from './util.js';
+import { placementPages, placementLabel, pdfSummary, pdfSummaryLabel } from '../domain/content-info.js';
+import { presetStatus } from '../domain/preset.js';
 import { startPageOf } from '../domain/placement.js';
 import { getImageUrl } from '../images.js';
 import { formatDateTime } from './util.js';
@@ -18,41 +20,54 @@ function rangeLabel(pages, content) {
   return content.requiredPages === 1 ? `P${start}` : `P${start}–P${start + content.requiredPages - 1}`;
 }
 
-// 左カラム：コンテンツ一覧・追加
-function renderContentList({ contents, pages, pdfAssets }, draft) {
+// 標準構成をセットできる項目が残っているか（すべて標準位置に配置済みなら、ボタンは使えない）
+function presetAllDone(state) {
+  return presetStatus(state).every((x) => x.status === 'placed-standard');
+}
+
+// 左カラム：コンテンツ管理（冊子に何を載せるか）。PDFのサムネイルは表示しない
+function renderContentList(cur, draft) {
+  const { contents, pages, pdfAssets } = cur;
+  const done = presetAllDone(cur);
   const items = contents
     .map((c) => {
-      const range = rangeLabel(pages, c);
-      const status = range
-        ? `<span class="text-indigo-700">${range}に配置済み</span>`
-        : '<span class="text-slate-500">未配置（ドラッグして配置）</span>';
-      const asset = pdfAssets.find((a) => a.contentId === c.id);
-      const pdfLine = asset
-        ? `<div class="mt-1 break-all text-xs text-slate-600">PDF：${esc(asset.originalFileName)}（${asset.pageCount}/${c.requiredPages}ページ）</div>`
-        : '';
-      // 未配置のコンテンツにPDFが残っている場合は、ここからPDF登録を解除できる
+      const nums = placementPages(pages, c.id);
+      const placed = nums.length > 0;
+      const status = placed
+        ? `<span class="text-indigo-700">配置：${esc(placementLabel(nums))}</span>`
+        : '<span class="text-slate-500">配置：未配置（ドラッグして配置）</span>';
+      const summary = pdfSummary(c, pages, pdfAssets);
+      // 未配置のコンテンツにPDFが残っている場合は、ここからPDF登録を解除できる（PDF素材の管理は後続の段階で作り替える）
       const unreg =
-        asset && !range
+        summary.hasPdf && !placed
           ? `<button type="button" class="${btnSecondary} !px-2 !py-1 !text-xs" data-action="ask-unregister-pdf" data-id="${esc(c.id)}">PDF登録を解除</button>`
           : '';
-      return `<li class="rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm" draggable="true" data-drag-content="${esc(c.id)}">
-        <div class="flex items-center justify-between gap-2">
-          <span class="min-w-0 cursor-grab break-words font-medium">${esc(c.name)}</span>
-          <span class="shrink-0 text-xs text-slate-600">${c.requiredPages}P</span>
+      return `<li class="rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm" draggable="true" data-drag-content="${esc(c.id)}" data-content-card="${esc(c.id)}">
+        <div class="flex items-start justify-between gap-2">
+          <span class="min-w-0 cursor-grab font-medium [overflow-wrap:anywhere]">${esc(c.name)}</span>
+          <span class="shrink-0 text-xs text-slate-600" data-required-pages>${c.requiredPages}P</span>
         </div>
-        <div class="mt-1 text-xs">${status}</div>${pdfLine}
-        <div class="mt-2 flex flex-wrap gap-2">
-          ${unreg}
+        <div class="mt-1 text-xs" data-placement>${status}</div>
+        <div class="text-xs text-slate-600" data-pdf-summary>${esc(pdfSummaryLabel(summary))}</div>
+        <div class="mt-2 flex flex-wrap items-center gap-1.5">
           <button type="button" class="${btnSecondary} !px-2 !py-1 !text-xs" data-action="edit-content" data-id="${esc(c.id)}">編集</button>
+          ${pdfPicker(c.id, 'PDF登録').replace(btnSecondary, `${btnSecondary} !px-2 !py-1 !text-xs`)}
           <button type="button" class="${btnDanger} !px-2 !py-1 !text-xs" data-action="ask-delete-content" data-id="${esc(c.id)}">削除</button>
+          <button type="button" class="${btnSecondary} !px-2 !py-1 !text-xs" data-action="show-content-pdf" data-id="${esc(c.id)}" aria-haspopup="dialog" aria-label="${esc(c.name)}のPDF配置情報" title="PDF配置情報">…</button>
+          ${unreg}
         </div>
       </li>`;
     })
     .join('');
+  const empty = contents.length === 0
+    ? '<p class="rounded border border-dashed border-slate-300 px-3 py-4 text-center text-xs text-slate-500" data-empty-contents>コンテンツはまだありません。［標準構成をセット］か、下のフォームから追加してください。</p>'
+    : '';
   return `
     <section class="rounded-lg border border-slate-200 bg-white p-4">
       <h2 class="mb-3 text-sm font-semibold">コンテンツ一覧</h2>
-      <ul class="space-y-2">${items}</ul>
+      <button type="button" class="${btnSecondary} mb-3 w-full gap-2 !border-indigo-300 !text-indigo-700 hover:!bg-indigo-50" data-action="open-preset" aria-haspopup="dialog" ${done ? 'disabled' : ''}
+        title="${done ? '標準構成はすべて標準の位置に配置済みです' : '表紙・表紙裏・目次・裏表紙裏・裏表紙を、標準の位置にまとめてセットします'}">標準構成をセット</button>
+      <ul class="space-y-2" data-content-list>${items}</ul>${empty}
       <form data-form="add-content" class="mt-4 space-y-2 border-t border-slate-200 pt-4" novalidate>
         <h3 class="text-xs font-semibold text-slate-600">コンテンツを追加</h3>
         <div>
@@ -156,10 +171,11 @@ function renderDetail({ contents, pages, pdfAssets }, selectedNo) {
 
 export function renderCompose(state) {
   const cur = state.current;
+  // lg以上：高さを親（画面の高さ）に合わせ、3カラムがそれぞれ縦スクロールする。lg未満：縦に積んでページ全体でスクロール
   return `
-    <div class="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)_300px]">
-      <aside class="space-y-4">${renderContentList(cur, state.contentDraft)}</aside>
-      <section class="min-w-0">${renderPageCards(cur, state.selectedPageNo)}</section>
-      <aside class="space-y-4">${renderDetail(cur, state.selectedPageNo)}</aside>
+    <div class="grid gap-4 lg:h-full lg:grid-cols-[280px_minmax(0,1fr)_300px] lg:grid-rows-[minmax(0,1fr)]" data-compose-grid>
+      <aside class="relative min-w-0 space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-left" data-column="left">${renderContentList(cur, state.contentDraft)}</aside>
+      <section class="relative min-w-0 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-center" data-column="center">${renderPageCards(cur, state.selectedPageNo)}</section>
+      <aside class="relative min-w-0 space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-right" data-column="right">${renderDetail(cur, state.selectedPageNo)}</aside>
     </div>`;
 }

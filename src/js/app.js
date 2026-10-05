@@ -117,6 +117,15 @@ root.addEventListener('click', async (e) => {
       case 'dismiss-import-error':
         store.dismissImportError();
         break;
+      case 'open-preset':
+        store.openPresetDialog();
+        break;
+      case 'confirm-preset':
+        await store.confirmPreset();
+        break;
+      case 'show-content-pdf':
+        store.setModal({ type: 'content-pdf-info', contentId: id });
+        break;
       case 'edit-name':
         store.startNameEdit();
         break;
@@ -365,6 +374,12 @@ root.addEventListener('change', async (e) => {
   if (!file) return;
   const ok = await store.importViewerData(file);
   if (ok) location.hash = '#/view'; // 編集画面を経由せず、ビューアを直接開く
+});
+
+// ---- 標準構成ポップアップのチェックボックス ----
+root.addEventListener('change', (e) => {
+  const box = e.target.closest('input[data-preset-key]');
+  if (box) store.togglePresetKey(box.dataset.presetKey, box.checked);
 });
 
 // ---- PDFファイル選択：解析モーダルを開く（PDFはブラウザ内で処理し、外部へ送信しない）----

@@ -1,4 +1,6 @@
-import { esc, btnSecondary, btnPrimary, inputCls, formatRanges } from './util.js';
+import { esc, btnSecondary, btnPrimary, inputCls, formatRanges, circled } from './util.js';
+import { presetStatus } from '../domain/preset.js';
+import { pdfInfoRows } from '../domain/content-info.js';
 import { modeRadios, renderPdfImportModal } from './pdf-import-modal.js';
 
 // 冊子削除の確認ダイアログ（登録PDFも削除され元に戻せない旨を明示する）
@@ -43,6 +45,8 @@ export function renderModal(state) {
         </div>
       </div>`;
   }
+  if (m.type === 'preset') return renderPresetDialog(m, state.current);
+  if (m.type === 'content-pdf-info') return renderContentPdfInfo(m, state.current);
   if (m.type === 'resize-pages') return m.stage === 'confirm' ? renderResizeConfirm(m) : renderResizeInput(m);
   if (m.type === 'pdf-import') return renderPdfImportModal(m);
   if (m.type === 'unregister-pdf') {
@@ -138,6 +142,58 @@ function renderResizeConfirm(m) {
         <div class="flex justify-end gap-3">
           <button type="button" class="${btnSecondary}" data-action="cancel-modal">キャンセル</button>
           <button type="button" class="inline-flex items-center rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700" data-action="confirm-resize">変更する</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+// 標準構成をセット：項目ごとにチェックして選ぶ。選べない項目はグレーアウトして理由を表示する
+function renderPresetDialog(m, cur) {
+  const status = presetStatus(cur);
+  const selected = new Set(m.selected);
+  const rows = status
+    .map((s) => {
+      const checked = s.selectable && selected.has(s.key);
+      const cls = s.selectable ? 'text-slate-800' : 'text-slate-400';
+      const note = s.note ? `<span class="block text-xs ${s.selectable ? 'text-indigo-700' : 'text-slate-500'}">${esc(s.note)}</span>` : '';
+      return `<li>
+        <label class="flex items-start gap-2 rounded px-2 py-1.5 ${s.selectable ? 'cursor-pointer hover:bg-slate-50' : 'cursor-not-allowed bg-slate-50'}" data-preset-row="${s.key}" data-status="${s.status}">
+          <input id="preset-${s.key}" type="checkbox" class="mt-0.5 h-4 w-4 rounded border-slate-300" data-preset-key="${s.key}" ${checked ? 'checked' : ''} ${s.selectable ? '' : 'disabled'} />
+          <span class="min-w-0 flex-1 text-sm ${cls}">
+            <span class="flex justify-between gap-2"><span>${esc(s.name)}（1P）</span><span class="shrink-0">→ P${s.position}</span></span>${note}
+          </span>
+        </label>
+      </li>`;
+    })
+    .join('');
+  const none = !status.some((s) => s.selectable && selected.has(s.key));
+  return `${OVERLAY}
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+        <h2 id="dlg-title" class="mb-1 text-lg font-semibold">標準構成をセット</h2>
+        <p class="mb-3 text-xs text-slate-600">セットする項目を選んでください。コンテンツを一覧に追加し、標準の位置へ配置します。すでにあるコンテンツの配置は動かしません。</p>
+        <ul class="space-y-1" data-preset-list>${rows}</ul>
+        <div class="mt-4 flex justify-end gap-3">
+          <button type="button" class="${btnSecondary}" data-action="cancel-modal">キャンセル</button>
+          <button type="button" class="${btnPrimary}" data-action="confirm-preset" ${none ? 'disabled' : ''}>選択したコンテンツをセット</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+// コンテンツの「…」：画像が割り当て済みのページを、ページ番号の昇順で表示する（確認用。編集操作はない）
+function renderContentPdfInfo(m, cur) {
+  const c = cur.contents.find((x) => x.id === m.contentId);
+  if (!c) return '';
+  const rows = pdfInfoRows(c, cur.pages, circled);
+  const body = rows.length
+    ? `<ul class="space-y-1 text-sm" data-pdf-info-list>${rows.map((r) => `<li class="flex gap-3"><span class="w-10 shrink-0 font-semibold">P${r.pageNo}</span><span class="min-w-0 break-words">${esc(r.label)}</span></li>`).join('')}</ul>`
+    : '<p class="text-sm text-slate-600" data-pdf-info-empty>配置されているPDFはありません</p>';
+  return `${OVERLAY}
+      <div class="w-full max-w-sm rounded-lg bg-white p-5 shadow-xl">
+        <h2 id="dlg-title" class="mb-3 break-words text-lg font-semibold">PDF配置情報（${esc(c.name)}）</h2>
+        ${body}
+        <div class="mt-4 flex justify-end">
+          <button type="button" class="${btnSecondary}" data-action="cancel-modal">閉じる</button>
         </div>
       </div>
     </div>`;

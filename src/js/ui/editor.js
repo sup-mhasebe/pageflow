@@ -59,9 +59,11 @@ export function renderEditor(state) {
   else if (state.tab === 'preview') body = renderViewer(buildViewerModel(state.current), state.viewer, state.viewerMode);
   else body = renderImposition(state);
 
+  // 構成タブ（lg以上）：ヘッダー・タブは固定し、本文の3カラムがそれぞれスクロールする
+  const fit = state.tab === 'compose';
   return `
-    <div class="mx-auto max-w-7xl px-4 py-4">
-      <header class="mb-4 space-y-2">
+    <div class="mx-auto max-w-7xl px-4 py-4 ${fit ? 'lg:flex lg:h-dvh lg:flex-col' : ''}">
+      <header class="mb-4 space-y-2 ${fit ? 'lg:shrink-0' : ''}">
         <div class="flex flex-wrap items-center gap-3">
           <button type="button" class="${btnSecondary}" data-action="go-home">← 一覧へ</button>
           <div class="order-last w-full min-w-0 sm:order-none sm:w-auto sm:flex-1">${renderNameField(booklet.name, state.nameEdit)}</div>
@@ -79,6 +81,6 @@ export function renderEditor(state) {
         ${warn}
         <nav class="flex border-b border-slate-200" aria-label="編集タブ">${tabs}</nav>
       </header>
-      ${body}
+      <div class="${fit ? 'lg:min-h-0 lg:flex-1' : ''}">${body}</div>
     </div>`;
 }
