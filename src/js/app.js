@@ -417,11 +417,8 @@ window.addEventListener('pointercancel', () => {
   swipe = null;
 });
 
-// スマートフォン幅（〜639px）は1ページ表示、それ以上は見開き表示
-const compactQuery = window.matchMedia('(max-width: 639px)');
-const syncViewerMode = () => store.setViewerMode(compactQuery.matches ? 'single' : 'spread');
-compactQuery.addEventListener('change', syncViewerMode);
-syncViewerMode();
+// ビューアは画面幅によらず見開き構成（P1単独｜P2-P3｜…）。スマートフォンは縮小して画面幅に収める
+store.setViewerMode('spread');
 
 // ---- ビューア用データ（.pageflow）の選択：標準の <input type="file"> と File API のみを使用 ----
 root.addEventListener('change', async (e) => {

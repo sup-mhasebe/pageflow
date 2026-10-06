@@ -11,8 +11,14 @@
   --ph: min(calc(100dvh - 300px), calc((100vw - 4rem) * 297 / 420));
   touch-action: pan-y;
 }
-.viewer-stage[data-mode="single"] {
-  --ph: min(calc(100dvh - 280px), calc((100vw - 3.5rem) * 297 / 210));
+/* スマートフォン（〜639px）：見開き2ページを横並びのまま画面幅に収める（最小高さも外して縮小） */
+@media (max-width: 639px) {
+  .viewer-stage[data-mode="spread"] {
+    --ph: min(calc(100dvh - 280px), calc((100vw - 3.5rem) * 297 / 420));
+  }
+  .viewer-stage[data-mode="spread"] .viewer-page {
+    height: var(--ph);
+  }
 }
 .viewer-pages {
   position: relative;
