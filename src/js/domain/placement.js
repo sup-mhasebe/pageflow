@@ -1,7 +1,6 @@
 // コンテンツ配置の純粋関数。入力を書き換えず、新しい配列を返す。
 // 原則：連続空きが確保できない場合は拒否し、既存の配置を勝手に動かさない・上書きしない。
-// PDFはコンテンツ単位で登録されており、冊子ページとの対応は配置位置から導出し直す（relinkPages）。
-import { relinkPages } from './pdf.js';
+// PDFの割り当て（Page.renderImageId）はユーザーが決めたもの。配置を動かしても、並び順から再計算はしない。
 
 const pageMap = (pages) => new Map(pages.map((p) => [p.physicalPageNumber, p]));
 
@@ -36,9 +35,6 @@ export function checkRange(state, content, startNo, requiredPages = content.requ
     const p = byNo.get(n);
     if (p?.contentId && p.contentId !== content.id) {
       const other = byId.get(p.contentId);
-      if (other?.isFixed) {
-        return { ok: false, reason: `P${n}は固定ページ（${other.name}）のため配置できません。` };
-      }
       return { ok: false, reason: `P${n}は「${other?.name ?? '別のコンテンツ'}」が使用中のため配置できません。` };
     }
   }
@@ -49,35 +45,61 @@ export function checkRange(state, content, startNo, requiredPages = content.requ
 export function placeContent(state, contentId, startNo) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, reason: 'コンテンツが見つかりません。' };
-  if (content.isFixed) return { ok: false, reason: '固定ページは配置・移動できません。' };
-
   const check = checkRange(state, content, startNo);
   if (!check.ok) return check;
 
   const currentStart = startPageOf(state.pages, contentId);
   if (currentStart === startNo) return { ok: true, pages: state.pages, unchanged: true };
 
+  // 移動：コンテンツ内の相対位置を保ち、各ページの内容一式（順序・割り当て）を新しい位置へ引き継ぐ
+  const offset = new Map();
+  for (const p of state.pages) {
+    if (p.contentId === contentId && currentStart !== null) {
+      offset.set(p.physicalPageNumber - currentStart, { contentPageIndex: p.contentPageIndex, pdfAssetId: p.pdfAssetId, renderImageId: p.renderImageId });
+    }
+  }
   const end = startNo + content.requiredPages - 1;
-  const pages = state.pages.map((p) => {
-    if (p.contentId === contentId) return { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null };
-    return p;
-  });
-  const next = pages.map((p) =>
-    p.physicalPageNumber >= startNo && p.physicalPageNumber <= end
-      ? { ...p, contentId, contentPageIndex: p.physicalPageNumber - startNo }
-      : p,
+  const cleared = state.pages.map((p) =>
+    p.contentId === contentId ? { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null } : p,
   );
-  // 登録済みPDFはコンテンツに付随して移動する（新しい配置位置へ対応付け直す）
-  return { ok: true, pages: relinkPages({ ...state, pages: next }), moved: currentStart !== null };
+  const pages = cleared.map((p) => {
+    if (p.physicalPageNumber < startNo || p.physicalPageNumber > end) return p;
+    const rel = p.physicalPageNumber - startNo;
+    return { ...p, contentId, ...(offset.get(rel) ?? { contentPageIndex: rel }) };
+  });
+  return { ok: true, pages, moved: currentStart !== null };
+}
+
+// ---- ページの入れ替え（swap）----
+// 中央ビューで、物理ページを別の物理ページへドラッグしたときの動作。空きページへ自動で逃がさず、ドロップ先と内容一式を交換する。
+// 交換するもの：Content・Content内のページ順（contentPageIndex）・割り当て（renderImageId／pdfAssetId）。
+// 交換後に、関わるContentの配置が連続した範囲でなくなる場合は拒否する（元の状態を変えない）。
+const SWAP_KEYS = ['contentId', 'contentPageIndex', 'pdfAssetId', 'renderImageId'];
+
+export function swapPages(state, fromNo, toNo) {
+  const a = state.pages.find((p) => p.physicalPageNumber === fromNo);
+  const b = state.pages.find((p) => p.physicalPageNumber === toNo);
+  if (!a || !b) return { ok: false, reason: '入れ替え先のページが不正です。' };
+  if (a === b || (!a.contentId && !b.contentId)) return { ok: true, pages: state.pages, unchanged: true };
+  const pick = (p) => Object.fromEntries(SWAP_KEYS.map((k) => [k, p[k]]));
+  const pages = state.pages.map((p) => (p === a ? { ...p, ...pick(b) } : p === b ? { ...p, ...pick(a) } : p));
+  for (const id of new Set([a.contentId, b.contentId].filter(Boolean))) {
+    const nums = pages.filter((p) => p.contentId === id).map((p) => p.physicalPageNumber).sort((x, y) => x - y);
+    const contiguous = nums.every((n, i) => i === 0 || n === nums[i - 1] + 1);
+    if (!contiguous) {
+      const c = state.contents.find((x) => x.id === id);
+      return { ok: false, reason: `P${fromNo}とP${toNo}を入れ替えると、「${c?.name ?? 'コンテンツ'}」のページが連続しなくなるため入れ替えできません。` };
+    }
+  }
+  return { ok: true, pages };
 }
 
 // 配置解除：コンテンツが占有する全ページを解除する（コンテンツ自体は残す）
 export function unplaceContent(state, contentId) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, reason: 'コンテンツが見つかりません。' };
-  if (content.isFixed) return { ok: false, reason: '固定ページは配置解除できません。' };
   if (!isPlaced(state.pages, contentId)) return { ok: false, reason: 'このコンテンツは配置されていません。' };
-  // 配置解除：冊子ページとの対応のみ外す。登録済みPDF（PdfAsset）はコンテンツに残る
+  // 配置解除：ページ配置とそのページへの割り当てだけを外す。Content・PdfAsset・RenderImage は残る
   const pages = state.pages.map((p) =>
     p.contentId === contentId
       ? { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null }

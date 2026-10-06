@@ -55,7 +55,7 @@ test('モード切替時もページを保てる：1ページ表示のP3 → 見
 
 // ---- 画面（HTML）----
 function sampleModel() {
-  const set = createBooklet('テスト冊子', 8);
+  const set = createBooklet('テスト冊子', 8, { preset: true });
   let state = { ...set, pdfAssets: [], renderImages: [] };
   const added = addContent(state, '特集', '2');
   state = { ...state, contents: [...state.contents, added.content] };
@@ -68,8 +68,8 @@ function sampleModel() {
 const view = (pageNo, over = {}) => ({ pageNo, showInfo: true, anim: null, ...over });
 const count = (html, re) => (html.match(re) ?? []).length;
 
-test('表示モデル：コンテンツ名（固定ページ名・①②・空き）が入る。編集データは変更されない', () => {
-  const set = createBooklet('テスト冊子', 8);
+test('表示モデル：コンテンツ名（標準構成の名前・①②・空き）が入る。編集データは変更されない', () => {
+  const set = createBooklet('テスト冊子', 8, { preset: true });
   const state = { ...set, pdfAssets: [], renderImages: [] };
   const before = JSON.stringify(state);
   const model = buildViewerModel(state);
@@ -103,7 +103,7 @@ test('画像があるページは<img>、無いページはプレースホルダ
   assert.equal(count(noImg, /PDF未登録/g), 2);
 });
 
-test('固定ページのプレースホルダーには固定ページ名を表示する', () => {
+test('標準構成のコンテンツ（裏表紙）のプレースホルダーにはコンテンツ名を表示する', () => {
   const m = sampleModel();
   const html = renderViewer(m, view(8), 'spread');
   assert.match(html, /裏表紙/);
@@ -158,4 +158,26 @@ test('冊子名やコンテンツ名のHTMLはエスケープされる', () => {
   const html = renderViewer(m, view(4), 'spread');
   assert.doesNotMatch(html, /<img src=x/);
   assert.match(html, /&lt;img src=x/);
+});
+
+// ---- 綴じ辺ガイド（左綴じ）----
+test('綴じ辺ガイド：P1は左辺、見開きは中央1本、最終ページ（偶数）は右辺', () => {
+  const m = sampleModel();
+  const guides = (html) => [...html.matchAll(/data-spine="(\w+)"/g)].map((x) => x[1]);
+  assert.deepEqual(guides(renderViewer(m, view(1), 'spread')), ['left']);
+  assert.deepEqual(guides(renderViewer(m, view(2), 'spread')), ['center']);
+  assert.deepEqual(guides(renderViewer(m, view(4), 'spread')), ['center']);
+  assert.deepEqual(guides(renderViewer(m, view(8), 'spread')), ['right']);
+  // 1ページ表示：奇数＝左辺、偶数＝右辺
+  assert.deepEqual(guides(renderViewer(m, view(3), 'single')), ['left']);
+  assert.deepEqual(guides(renderViewer(m, view(2), 'single')), ['right']);
+});
+
+test('綴じ辺ガイドはページ情報OFFでも残り、説明文はONのときだけ表示される', () => {
+  const m = sampleModel();
+  const on = renderViewer(m, view(2), 'spread');
+  const off = renderViewer(m, view(2, { showInfo: false }), 'spread');
+  assert.match(on, /赤線：綴じ辺（左綴じ）/);
+  assert.doesNotMatch(off, /赤線：綴じ辺/);
+  assert.match(off, /data-spine="center"/);
 });

@@ -12,7 +12,7 @@ export function buildViewerModel(current) {
     totalPages: booklet.totalPages,
     pages: pages.map((p) => {
       const c = p.contentId ? byId.get(p.contentId) : null;
-      const index = c && !c.isFixed && c.requiredPages > 1 ? ` ${circled(p.contentPageIndex + 1)}` : '';
+      const index = c && c.requiredPages > 1 ? ` ${circled(p.contentPageIndex + 1)}` : '';
       return {
         physicalPageNumber: p.physicalPageNumber,
         contentName: c ? `${c.name}${index}` : '空き',
@@ -60,7 +60,17 @@ function renderPage(page, showInfo) {
   </figure>`;
 }
 
-// viewerState: { pageNo, showInfo, anim } ／ mode: 'spread'（PC）| 'single'（スマートフォン）
+// 綴じ辺ガイド（左綴じ）。画像の大きさ・比率は変えず、細い線を重ねるだけの装飾（ページ情報のON/OFFとは独立）
+// 単ページ：奇数ページ＝左辺、偶数ページ＝右辺。見開き：中央（ノド）に1本
+const spine = (edge) => `<span class="viewer-spine" data-spine="${edge}" aria-hidden="true"></span>`;
+
+// 前へ／次へボタン（PC：左右、〜1023px：下部）。同じ data-action を使うので操作は共通
+function navBtn(dir, disabled, cls) {
+  const text = dir === 'prev' ? '← 前へ' : '次へ →';
+  return `<button type="button" class="${btnSecondary} ${cls}" data-action="viewer-${dir}" ${disabled ? 'disabled' : ''}>${text}</button>`;
+}
+
+// viewerState: { pageNo, showInfo, anim } ／ mode: 'spread'（640px以上）| 'single'（スマートフォン）
 export function renderViewer(model, viewerState, mode) {
   const screens = buildScreens(model.totalPages, mode);
   const index = screenIndexOf(screens, viewerState.pageNo);
@@ -71,27 +81,34 @@ export function renderViewer(model, viewerState, mode) {
   const animCls = viewerState.anim ? `viewer-anim-${viewerState.anim}` : '';
   const label = screen.map((n) => `P${n}`).join('・');
   const infoOn = viewerState.showInfo;
+  const pagesHtml = screen.map((n) => renderPage(byNo.get(n), infoOn)).join('');
+  const guide = screen.length === 2 ? spine('center') : spine(screen[0] % 2 === 1 ? 'left' : 'right');
 
   return `
-    <section class="mx-auto max-w-5xl" aria-label="冊子ビューア" data-viewer data-mode="${mode}">
+    <section class="mx-auto max-w-6xl" aria-label="冊子ビューア" data-viewer data-mode="${mode}">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div class="flex items-center gap-2">
-          <button type="button" class="${btnSecondary}" data-action="viewer-prev" ${atFirst ? 'disabled' : ''}>← 前へ</button>
-          <span class="min-w-[7rem] text-center text-sm" aria-live="polite">
-            <strong data-viewer-position>${index + 1} / ${screens.length}</strong>
-            <span class="ml-1 text-xs text-slate-500" data-viewer-label>${label}</span>
-          </span>
-          <button type="button" class="${btnSecondary}" data-action="viewer-next" ${atLast ? 'disabled' : ''}>次へ →</button>
-        </div>
+        <span class="text-center text-sm" aria-live="polite">
+          <strong data-viewer-position>${index + 1} / ${screens.length}</strong>
+          <span class="ml-1 text-xs text-slate-500" data-viewer-label>${label}</span>
+        </span>
         <button type="button" role="switch" aria-checked="${infoOn}" class="${btnSecondary}" data-action="viewer-toggle-info">
           ページ情報：<strong>${infoOn ? 'ON' : 'OFF'}</strong>
         </button>
       </div>
-      <div class="viewer-stage touch-pan-y select-none overflow-hidden rounded-lg bg-slate-200 p-3 sm:p-4" data-viewer-stage data-mode="${mode}">
-        <div class="viewer-pages ${animCls}" data-viewer-screen="${index}" data-spread-pages="${screen.length}">
-          ${screen.map((n) => renderPage(byNo.get(n), infoOn)).join('')}
+      <div class="viewer-layout">
+        ${navBtn('prev', atFirst, 'viewer-side-nav')}
+        <div class="viewer-stage touch-pan-y select-none overflow-hidden rounded-lg bg-slate-200 p-3 sm:p-4" data-viewer-stage data-mode="${mode}">
+          <div class="viewer-pages ${animCls}" data-viewer-screen="${index}" data-spread-pages="${screen.length}">
+            ${pagesHtml}${guide}
+          </div>
         </div>
+        ${navBtn('next', atLast, 'viewer-side-nav')}
       </div>
+      <div class="viewer-bottom-nav mt-3 grid grid-cols-2 gap-3">
+        ${navBtn('prev', atFirst, 'py-3')}
+        ${navBtn('next', atLast, 'py-3')}
+      </div>
+      ${infoOn ? '<p class="mt-2 text-center text-xs text-slate-600" data-spine-legend><span class="viewer-spine-sample" aria-hidden="true"></span>赤線：綴じ辺（左綴じ）</p>' : ''}
       <p class="mt-2 text-center text-xs text-slate-500">
         <span class="hidden sm:inline">← → キーでもページを移動できます。</span>
         <span class="sm:hidden">左右にスワイプしてページを移動できます。</span>

@@ -106,7 +106,7 @@ export function buildManifest(current, imageFileByPageNo) {
     bindingDirection: booklet.bindingDirection,
     pages: sorted.map((p) => {
       const c = p.contentId ? byId.get(p.contentId) : null;
-      const multi = c && !c.isFixed && c.requiredPages > 1;
+      const multi = c && c.requiredPages > 1;
       return {
         pageNo: p.physicalPageNumber,
         contentName: c ? c.name : '空き',

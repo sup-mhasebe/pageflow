@@ -8,10 +8,10 @@ function pageInfo({ contents, pages }, no) {
   const c = p?.contentId ? contents.find((x) => x.id === p.contentId) : null;
   let name = '空き';
   if (c) {
-    const idx = !c.isFixed && c.requiredPages > 1 ? ` ${circled(p.contentPageIndex + 1)}` : '';
+    const idx = c.requiredPages > 1 ? ` ${circled(p.contentPageIndex + 1)}` : '';
     name = `${c.name}${idx}`;
   }
-  return { name, isEmpty: !c, isFixed: !!c?.isFixed, imageUrl: getImageUrl(p?.renderImageId) };
+  return { name, isEmpty: !c, imageUrl: getImageUrl(p?.renderImageId) };
 }
 
 // A3の片側（左ページ／右ページ）
@@ -26,7 +26,7 @@ function half(label, no, info) {
         </div>
       </div>`;
   }
-  const bg = info.isEmpty ? 'bg-white border border-dashed border-slate-300' : info.isFixed ? 'bg-slate-100' : 'bg-indigo-50';
+  const bg = info.isEmpty ? 'bg-white border border-dashed border-slate-300' : 'bg-indigo-50';
   return `
     <div class="flex min-w-0 flex-col items-center justify-center gap-1 p-2 text-center ${bg}">
       <span class="text-[11px] text-slate-500">${label}</span>

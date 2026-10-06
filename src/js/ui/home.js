@@ -1,10 +1,13 @@
-import { esc, formatDateTime, btnPrimary, btnSecondary, btnDanger } from './util.js';
+import { esc, formatDateTime, btnPrimary, btnSecondary, btnDanger, iconBook } from './util.js';
 
 function bookletCard(b) {
   return `
-    <li class="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <li class="flex min-w-0 flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div>
-        <h3 class="break-words text-base font-semibold">${esc(b.name)}</h3>
+        <h3 class="flex items-start gap-2 text-base font-semibold">
+          ${iconBook('mt-0.5 h-5 w-5 shrink-0 text-indigo-600')}
+          <span class="min-w-0 [overflow-wrap:anywhere]">${esc(b.name)}</span>
+        </h3>
         <p class="mt-1 text-sm text-slate-600">総ページ数：${b.totalPages}P</p>
         <p class="text-xs text-slate-500">更新：${formatDateTime(b.updatedAt)}</p>
       </div>

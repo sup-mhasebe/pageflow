@@ -1,5 +1,10 @@
 import { esc, btnSecondary, btnDanger, btnPrimary, inputCls, circled } from './util.js';
-import { startPageOf } from '../domain/placement.js';
+import { placementPages, placementLabel, pdfSummary, pdfSummaryLabel, materialCountLabel } from '../domain/content-info.js';
+import { presetStatus } from '../domain/preset.js';
+import { assetOfContent } from '../domain/pdf.js';
+import { contentColor } from '../domain/content-color.js';
+import { ZOOM_MAX, ZOOM_MIN, cardWidth, spreadRows, zoomLabel } from '../domain/compose-view.js';
+import { assignmentMap, materialName, materialsOf, pageState, planSequentialAssign, resolveMaterialContentId } from '../domain/assignment.js';
 import { getImageUrl } from '../images.js';
 import { formatDateTime } from './util.js';
 
@@ -11,54 +16,55 @@ const pdfPicker = (contentId, label) =>
     <input type="file" accept="application/pdf,.pdf" class="sr-only" data-pdf-input data-content-id="${esc(contentId)}" />
   </label>`;
 
-// 配置範囲の表示（例：P4–P5）
-function rangeLabel(pages, content) {
-  const start = startPageOf(pages, content.id);
-  if (start === null) return null;
-  return content.requiredPages === 1 ? `P${start}` : `P${start}–P${start + content.requiredPages - 1}`;
+// 標準構成をセットできる項目が残っているか（すべて標準位置に配置済みなら、ボタンは使えない）
+function presetAllDone(state) {
+  return presetStatus(state).every((x) => x.status === 'placed-standard');
 }
 
-// 左カラム：コンテンツ一覧・追加
-function renderContentList({ contents, pages, pdfAssets }, draft) {
+// 左カラム：コンテンツ管理（冊子の構造）。PDFのサムネイルは表示せず、割り当て状況だけを示す
+function renderContentList(cur, draft) {
+  const { contents, pages, pdfAssets } = cur;
+  const done = presetAllDone(cur);
   const items = contents
     .map((c) => {
-      if (c.isFixed) {
-        return `<li class="flex items-center justify-between rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-          <span>${esc(c.name)}</span>
-          <span class="text-xs text-slate-500">固定・${c.requiredPages}P</span>
-        </li>`;
-      }
-      const range = rangeLabel(pages, c);
-      const status = range
-        ? `<span class="text-indigo-700">${range}に配置済み</span>`
-        : '<span class="text-slate-500">未配置（ドラッグして配置）</span>';
-      const asset = pdfAssets.find((a) => a.contentId === c.id);
-      const pdfLine = asset
-        ? `<div class="mt-1 break-all text-xs text-slate-600">PDF：${esc(asset.originalFileName)}（${asset.pageCount}/${c.requiredPages}ページ）</div>`
+      const nums = placementPages(pages, c.id);
+      const placed = nums.length > 0;
+      const status = placed
+        ? `<span class="text-indigo-700">配置：${esc(placementLabel(nums))}</span>`
+        : '<span class="text-slate-500">配置：未配置（ドラッグして配置）</span>';
+      const summary = pdfSummary(c, pages, pdfAssets, cur.renderImages);
+      const extra = materialCountLabel(summary);
+      // 配置の解除（コンテンツ・PDF素材は残り、ページ配置とそのページへの割り当てだけが外れる）
+      const unplace = placed
+        ? `<button type="button" class="${btnSecondary} !px-2 !py-1 !text-xs" data-action="unplace-content" data-id="${esc(c.id)}">配置を解除</button>`
         : '';
-      // 未配置のコンテンツにPDFが残っている場合は、ここからPDF登録を解除できる
-      const unreg =
-        asset && !range
-          ? `<button type="button" class="${btnSecondary} !px-2 !py-1 !text-xs" data-action="ask-unregister-pdf" data-id="${esc(c.id)}">PDF登録を解除</button>`
-          : '';
-      return `<li class="rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm" draggable="true" data-drag-content="${esc(c.id)}">
-        <div class="flex items-center justify-between gap-2">
-          <span class="min-w-0 cursor-grab break-words font-medium">${esc(c.name)}</span>
-          <span class="shrink-0 text-xs text-slate-600">${c.requiredPages}P</span>
+      // Contentの識別色（標準構成はpresetKeyによるグレー）。中央のページカードと同じ色
+      const col = contentColor(contents, c);
+      return `<li class="rounded border-2 px-3 py-2 text-sm" style="background:${col.bg};border-color:${col.border}" data-content-color="${col.key}" draggable="true" data-drag-content="${esc(c.id)}" data-content-card="${esc(c.id)}">
+        <div class="flex items-start justify-between gap-2">
+          <span class="min-w-0 cursor-grab font-medium [overflow-wrap:anywhere]">${esc(c.name)}</span>
+          <span class="shrink-0 text-xs text-slate-600" data-required-pages>${c.requiredPages}P</span>
         </div>
-        <div class="mt-1 text-xs">${status}</div>${pdfLine}
-        <div class="mt-2 flex flex-wrap gap-2">
-          ${unreg}
+        <div class="mt-1 text-xs" data-placement>${status}</div>
+        <div class="text-xs text-slate-600" data-pdf-summary>${esc(pdfSummaryLabel(summary))}${extra ? `<span class="ml-2 text-slate-500" data-material-count>${esc(extra)}</span>` : ''}</div>
+        <div class="mt-2 flex flex-wrap items-center gap-1.5">
           <button type="button" class="${btnSecondary} !px-2 !py-1 !text-xs" data-action="edit-content" data-id="${esc(c.id)}">編集</button>
           <button type="button" class="${btnDanger} !px-2 !py-1 !text-xs" data-action="ask-delete-content" data-id="${esc(c.id)}">削除</button>
+          <button type="button" class="${btnSecondary} !px-2 !py-1 !text-xs" data-action="show-content-pdf" data-id="${esc(c.id)}" aria-haspopup="dialog" aria-label="${esc(c.name)}のPDF配置情報" title="PDF配置情報">…</button>
+          ${unplace}
         </div>
       </li>`;
     })
     .join('');
+  const empty = contents.length === 0
+    ? '<p class="rounded border border-dashed border-slate-300 px-3 py-4 text-center text-xs text-slate-500" data-empty-contents>コンテンツはまだありません。［標準構成をセット］か、下のフォームから追加してください。</p>'
+    : '';
   return `
     <section class="rounded-lg border border-slate-200 bg-white p-4">
       <h2 class="mb-3 text-sm font-semibold">コンテンツ一覧</h2>
-      <ul class="space-y-2">${items}</ul>
+      <button type="button" class="${btnSecondary} mb-3 w-full gap-2 !border-indigo-300 !text-indigo-700 hover:!bg-indigo-50" data-action="open-preset" aria-haspopup="dialog" ${done ? 'disabled' : ''}
+        title="${done ? '標準構成はすべて標準の位置に配置済みです' : '表紙・表紙裏・目次・裏表紙裏・裏表紙を、標準の位置にまとめてセットします'}">標準構成をセット</button>
+      <ul class="space-y-2" data-content-list>${items}</ul>${empty}
       <form data-form="add-content" class="mt-4 space-y-2 border-t border-slate-200 pt-4" novalidate>
         <h3 class="text-xs font-semibold text-slate-600">コンテンツを追加</h3>
         <div>
@@ -77,117 +83,177 @@ function renderContentList({ contents, pages, pdfAssets }, draft) {
     </section>`;
 }
 
-// 中央カラム：P1〜PNのページカード（ドロップ先）
-function renderPageCards({ contents, pages }, selectedNo) {
-  const byId = new Map(contents.map((c) => [c.id, c]));
-  const cards = pages
-    .map((p) => {
-      const c = p.contentId ? byId.get(p.contentId) : null;
-      const isUser = c && !c.isFixed;
-      const selected = p.physicalPageNumber === selectedNo;
-      const ring = selected ? 'ring-2 ring-indigo-500' : 'ring-1 ring-slate-200';
-      const index = isUser && c.requiredPages > 1 ? ` ${circled(p.contentPageIndex + 1)}` : '';
-      const label = c ? `${esc(c.name)}${index}` : '空き';
-      const badge = c?.isFixed
-        ? '<span class="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-700">固定</span>'
-        : '';
-      // 生成画像があれば表示（PDFを直接描画せず、登録時に作った画像を共通利用）。無ければ「PDF未登録」
-      const url = getImageUrl(p.renderImageId);
-      const thumb = url
-        ? `<img src="${url}" alt="P${p.physicalPageNumber}のページ画像" class="h-full w-full object-contain" draggable="false" />`
-        : 'PDF未登録';
-      const bg = isUser
-        ? 'bg-indigo-50'
-        : c
-          ? 'bg-slate-100'
-          : 'bg-white border border-dashed border-slate-300';
-      const drag = isUser ? `draggable="true" data-drag-content="${esc(c.id)}"` : '';
-      return `
-        <li>
-          <div role="button" tabindex="0" data-action="select-page" data-no="${p.physicalPageNumber}" data-drop-page="${p.physicalPageNumber}" ${drag}
-            class="block w-full cursor-pointer rounded-lg bg-white p-2 text-left shadow-sm ${ring} hover:ring-indigo-300">
-            <div class="page-thumb flex items-center justify-center overflow-hidden rounded ${bg} text-xs text-slate-400">${thumb}</div>
-            <div class="mt-2 flex items-center justify-between gap-1">
-              <span class="text-sm font-semibold">P${p.physicalPageNumber}</span>${badge}
-            </div>
-            <div class="truncate text-xs text-slate-600">${label}</div>
-          </div>
-        </li>`;
-    })
-    .join('');
-  return `<ul class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">${cards}</ul>`;
+// 中央カラム：P1〜PNのページカード（素材の割り当て先・コンテンツの配置先）
+// 表示は4状態：空き／PDF未登録／素材あり・未割り当て／画像
+const STATE_TEXT = { empty: '', 'no-pdf': 'PDF未登録', unassigned: '素材あり・未割り当て' };
+
+function renderPageCard(cur, p, selectedNo, width) {
+  const { contents } = cur;
+  const c = p.contentId ? contents.find((x) => x.id === p.contentId) : null;
+  const selected = p.physicalPageNumber === selectedNo;
+  const ring = selected ? 'ring-2 ring-indigo-500' : 'ring-1 ring-slate-200';
+  const index = c && c.requiredPages > 1 ? ` ${circled(p.contentPageIndex + 1)}` : '';
+  const label = c ? `${esc(c.name)}${index}` : '空き';
+  // 割り当て済みの画像だけを表示する（素材の並び順などから推測して表示しない）
+  const url = getImageUrl(p.renderImageId);
+  const st = pageState(cur, p, !!url);
+  const thumb =
+    st === 'image'
+      ? `<img src="${url}" alt="P${p.physicalPageNumber}のページ画像" class="h-full w-full object-contain" draggable="false" />`
+      : STATE_TEXT[st];
+  const stateCls = st === 'unassigned' ? 'text-amber-700' : 'text-slate-400';
+  // 所属Contentの色は、ページ枠・背景・ラベルで示す（画像には色を重ねない）
+  const col = c ? contentColor(contents, c) : null;
+  const bg = c ? '' : 'bg-white border border-dashed border-slate-300';
+  const thumbStyle = c ? 'style="background:rgba(255,255,255,.6)"' : '';
+  const cardStyle = c ? `style="background:${col.bg};border-color:${col.border}" data-content-color="${col.key}"` : '';
+  // ページ同士の入れ替え（swap）用。内容のあるページだけドラッグできる
+  const drag = c ? `draggable="true" data-drag-page="${p.physicalPageNumber}"` : '';
+  // 割り当ての解除：PCではhover/focus時に表示、タッチ環境では常時表示
+  const unassign =
+    st === 'image'
+      ? `<button type="button" data-action="unassign-page" data-no="${p.physicalPageNumber}" aria-label="P${p.physicalPageNumber}の画像の割り当てを解除"
+          class="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/95 text-sm text-slate-700 shadow ring-1 ring-slate-300 opacity-0 hover:bg-red-50 hover:text-red-700 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+          title="割り当てを解除">×</button>`
+      : '';
+  return `
+    <div class="group relative" style="width:${width}px" data-page-wrap="${p.physicalPageNumber}">
+      <div role="button" tabindex="0" data-action="select-page" data-no="${p.physicalPageNumber}" data-drop-page="${p.physicalPageNumber}" data-page-state="${st}" ${drag} ${cardStyle}
+        class="block w-full cursor-pointer rounded-lg border-2 ${c ? '' : 'border-transparent bg-white'} p-2 text-left shadow-sm ${ring} hover:ring-indigo-300">
+        <div class="page-thumb flex items-center justify-center overflow-hidden rounded ${bg} text-xs ${stateCls}" ${thumbStyle} data-page-thumb>${thumb}</div>
+        <div class="mt-2 flex items-center justify-between gap-1">
+          <span class="text-sm font-semibold">P${p.physicalPageNumber}</span>
+        </div>
+        <div class="truncate text-xs text-slate-600">${label}</div>
+      </div>${unassign}
+    </div>`;
 }
 
-// 右カラム：選択ページ詳細（コンテンツ情報・配置解除）＋冊子設定
-function renderDetail({ booklet, contents, pages, pdfAssets }, selectedNo) {
-  let detail = '<p class="text-sm text-slate-500">ページカードを選択すると詳細を表示します。</p>';
-  const p = selectedNo ? pages.find((x) => x.physicalPageNumber === selectedNo) : null;
-  if (p) {
-    const c = p.contentId ? contents.find((x) => x.id === p.contentId) : null;
-    const kind = !c ? '空きページ' : c.isFixed ? '固定ページ（削除・配置解除・移動はできません）' : 'コンテンツ配置済み';
-    const rows = [
-      ['ページ', `<span class="font-semibold">P${p.physicalPageNumber}</span>`],
-      ['コンテンツ', c ? esc(c.name) : '-'],
-      ['状態', kind],
-    ];
-    if (c && !c.isFixed) {
-      rows.push(['必要ページ数', `${c.requiredPages}P`]);
-      rows.push(['配置範囲', rangeLabel(pages, c)]);
-      rows.push(['このページ', `${circled(p.contentPageIndex + 1)}（${p.contentPageIndex + 1}/${c.requiredPages}）`]);
-    }
-    rows.push(['このページのPDF', p.renderImageId ? '登録済み' : 'PDF未登録']);
-    const dl = rows
-      .map(([k, v]) => `<div class="flex justify-between gap-2"><dt class="shrink-0 whitespace-nowrap text-slate-500">${k}</dt><dd class="min-w-0 text-right">${v}</dd></div>`)
+// 中央ビューの表示切り替え（一覧／見開き）と拡大・縮小。表示設定だけを変え、保存データは変更しない
+function renderComposeToolbar(view) {
+  const seg = (mode, text) =>
+    `<button type="button" data-action="compose-mode" data-mode="${mode}" aria-pressed="${view.mode === mode}"
+      class="px-3 py-1.5 text-sm font-medium ${view.mode === mode ? 'bg-indigo-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-100'} focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-400">${text}</button>`;
+  const zbtn = `${btnSecondary} !px-2.5 !py-1`;
+  return `<div class="sticky top-0 z-10 -mx-1 mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 bg-white/95 px-1 py-2 backdrop-blur" data-compose-toolbar>
+      <div class="inline-flex overflow-hidden rounded-md border border-slate-300" role="group" aria-label="表示の切り替え">${seg('list', '一覧で表示')}${seg('spread', '見開きで表示')}</div>
+      <div class="inline-flex items-center gap-1" role="group" aria-label="拡大・縮小">
+        <button type="button" class="${zbtn}" data-action="zoom-out" aria-label="縮小" ${view.zoom <= ZOOM_MIN ? 'disabled' : ''}>－</button>
+        <span class="min-w-[3.5rem] text-center text-sm font-medium tabular-nums" data-zoom-label aria-live="polite">${zoomLabel(view.zoom)}</span>
+        <button type="button" class="${zbtn}" data-action="zoom-in" aria-label="拡大" ${view.zoom >= ZOOM_MAX ? 'disabled' : ''}>＋</button>
+        <button type="button" class="${zbtn}" data-action="zoom-fit" title="ページ全体が見える倍率にします">全体表示</button>
+      </div>
+    </div>`;
+}
+
+// 中央カラム：ツールバー＋ページ（一覧または見開き）。見開きは左綴じ：P1単独｜P2・P3｜…｜PN単独
+function renderCenter(state) {
+  const cur = state.current;
+  const view = state.composeView;
+  const w = cardWidth(view.zoom);
+  const byNo = new Map(cur.pages.map((p) => [p.physicalPageNumber, p]));
+  const card = (no) => renderPageCard(cur, byNo.get(no), state.selectedPageNo, w);
+  let body;
+  if (view.mode === 'spread') {
+    const rows = spreadRows(cur.booklet.totalPages);
+    const last = rows.length - 1;
+    const html = rows
+      .map((nums, i) => {
+        // 単独ページは、本のように P1 は右側・最終ページは左側に置く（反対側は空白）
+        const spacer = `<div style="width:${w}px" aria-hidden="true"></div>`;
+        const inner = nums.length === 2 ? `${card(nums[0])}${card(nums[1])}` : i === 0 ? `${spacer}${card(nums[0])}` : i === last ? `${card(nums[0])}${spacer}` : card(nums[0]);
+        return `<div class="flex w-fit shrink-0 gap-2 rounded-lg bg-slate-100 p-2" data-spread="${nums.join('-')}">${inner}</div>`;
+      })
       .join('');
-    const asset = c ? pdfAssets.find((a) => a.contentId === c.id) : null;
-    const pdfSection = c
-      ? `<div class="mt-4 border-t border-slate-200 pt-3">
-          <h3 class="mb-2 text-xs font-semibold text-slate-600">PDF（コンテンツ単位）</h3>
-          ${
-            asset
-              ? `<p class="break-all text-sm">${esc(asset.originalFileName)}</p>
-                 <p class="mb-2 text-xs text-slate-500">変換後${asset.pageCount}ページ／必要${c.requiredPages}ページ・登録 ${formatDateTime(asset.importedAt)}</p>
-                 <div class="flex flex-wrap gap-2">
-                   ${pdfPicker(c.id, 'PDFを差し替え')}
-                   <button type="button" class="${btnSecondary}" data-action="ask-unregister-pdf" data-id="${esc(c.id)}">PDF登録を解除</button>
-                 </div>`
-              : `<p class="mb-2 text-xs text-slate-500">PDF未登録</p>${pdfPicker(c.id, 'PDFを登録')}`
-          }
-        </div>`
-      : '';
-    const actions =
-      c && !c.isFixed
-        ? `<div class="mt-3"><button type="button" class="${btnSecondary}" data-action="unplace-content" data-id="${esc(c.id)}">配置を解除</button></div>`
-        : '';
-    detail = `<dl class="space-y-1 text-sm">${dl}</dl>${actions}${pdfSection}`;
+    // 見開きのまとまりは、中央ビューの幅に収まる数だけ横に並ぶ（折り返す）
+    body = `<div class="flex flex-wrap items-start gap-3 overflow-x-auto pb-1" data-compose-body data-mode="spread">${html}</div>`;
+  } else {
+    const cards = cur.pages.map((p) => card(p.physicalPageNumber)).join('');
+    body = `<div class="grid gap-3" style="grid-template-columns:repeat(auto-fill,minmax(min(${w}px,100%),${w}px))" data-compose-body data-mode="list">${cards}</div>`;
   }
-  return `
-    <section class="rounded-lg border border-slate-200 bg-white p-4">
-      <h2 class="mb-3 text-sm font-semibold">選択ページ</h2>${detail}
-    </section>
-    <section class="rounded-lg border border-slate-200 bg-white p-4">
-      <h2 class="mb-3 text-sm font-semibold">冊子設定</h2>
-      <form data-form="rename" class="mb-4 space-y-2" novalidate>
-        <label for="s-name" class="block text-xs font-medium text-slate-600">冊子名</label>
-        <input id="s-name" name="name" type="text" class="${inputCls}" value="${esc(booklet.name)}" autocomplete="off" />
-        <button type="submit" class="${btnSecondary}">冊子名を変更</button>
-      </form>
-      <form data-form="resize" class="mb-4 space-y-2" novalidate>
-        <label for="s-total" class="block text-xs font-medium text-slate-600">総ページ数（8以上の4の倍数）</label>
-        <input id="s-total" name="totalPages" type="text" inputmode="numeric" class="${inputCls}" value="${booklet.totalPages}" autocomplete="off" />
-        <button type="submit" class="${btnSecondary}">総ページ数を変更</button>
-        <p class="text-xs text-slate-500">増加は可能です。減少は、削除される末尾ページと新しい固定ページ位置にコンテンツが無い場合のみ可能です。</p>
-      </form>
-      <button type="button" class="${btnDanger}" data-action="ask-delete" data-id="${esc(booklet.id)}">この冊子を削除</button>
-    </section>`;
+  return `${renderComposeToolbar(view)}${body}`;
+}
+
+// 右カラム：PDF素材の管理（対象コンテンツの選択・PDFの登録／差し替え／削除・素材の一覧と割り当て）
+function renderMaterialItem(img, assignedPage) {
+  const url = getImageUrl(img.id);
+  const thumb = url
+    ? `<img src="${url}" alt="${esc(materialName(img))}のサムネイル" loading="lazy" decoding="async" class="h-full w-full object-contain" draggable="false" />`
+    : '';
+  const status = assignedPage
+    ? `<span class="text-indigo-700" data-material-status>P${assignedPage}に割り当て済み</span>`
+    : '<span class="text-slate-500" data-material-status>未割り当て</span>';
+  return `<li draggable="true" data-drag-image="${esc(img.id)}" data-material="${esc(img.id)}" data-assigned-page="${assignedPage ?? ''}"
+      class="flex cursor-grab items-center gap-3 rounded border ${assignedPage ? 'border-indigo-200 bg-indigo-50' : 'border-slate-200 bg-white'} p-2">
+      <div class="flex h-24 w-[4.5rem] shrink-0 items-center justify-center overflow-hidden rounded border border-slate-200 bg-slate-100">${thumb}</div>
+      <div class="min-w-0 text-sm"><p class="font-medium" data-material-name>${esc(materialName(img))}</p><p class="text-xs">${status}</p></div>
+    </li>`;
+}
+
+function renderMaterials(state) {
+  const cur = state.current;
+  const { contents, pages } = cur;
+  const head = '<h2 class="mb-3 text-sm font-semibold">PDF素材</h2>';
+  if (contents.length === 0) {
+    return `<section class="rounded-lg border border-slate-200 bg-white p-4" data-materials>${head}
+      <p class="text-sm text-slate-500" data-materials-empty>コンテンツを追加すると、ここでPDF素材を管理できます。</p></section>`;
+  }
+  const targetId = resolveMaterialContentId(contents, pages, state.selectedPageNo, state.materialContentId);
+  const content = contents.find((c) => c.id === targetId);
+  const asset = assetOfContent(cur, targetId);
+  const options = contents
+    .map((c) => `<option value="${esc(c.id)}" ${c.id === targetId ? 'selected' : ''}>${esc(c.name)}${assetOfContent(cur, c.id) ? '（PDFあり）' : ''}</option>`)
+    .join('');
+  const select = `<label for="m-content" class="block text-xs text-slate-600">対象コンテンツ</label>
+    <select id="m-content" data-material-select class="${inputCls} mb-3">${options}</select>`;
+
+  if (!asset) {
+    return `<section class="rounded-lg border border-slate-200 bg-white p-4" data-materials data-material-content="${esc(targetId)}">${head}${select}
+      <p class="mb-2 text-xs text-slate-500" data-material-none>「${esc(content.name)}」のPDFは未登録です。</p>
+      ${pdfPicker(targetId, '＋ PDFを登録')}</section>`;
+  }
+  const images = materialsOf(cur, targetId);
+  const used = assignmentMap(pages);
+  const pdfPages = new Set(images.map((i) => i.sourcePdfPage)).size;
+  const plan = planSequentialAssign(cur, targetId);
+  const items = images.map((img) => renderMaterialItem(img, used.get(img.id))).join('');
+  const menu = state.materialMenuOpen
+    ? `<div class="absolute right-0 z-10 mt-1 w-44 rounded-md border border-slate-200 bg-white py-1 shadow-lg" role="menu" data-material-menu-list>
+        <label class="block cursor-pointer px-3 py-2 text-sm hover:bg-slate-100 focus-within:bg-slate-100" role="menuitem">PDFを差し替え
+          <input type="file" accept="application/pdf,.pdf" class="sr-only" data-pdf-input data-content-id="${esc(targetId)}" />
+        </label>
+        <button type="button" class="block w-full px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50" role="menuitem" data-action="ask-unregister-pdf" data-id="${esc(targetId)}">PDFを削除</button>
+      </div>`
+    : '';
+  const seqTitle =
+    plan.count === 0
+      ? '割り当てできる素材、または空きページがありません'
+      : `未割り当ての素材を、このコンテンツの空きページへ順に割り当てます（${plan.count}ページ）`;
+  return `<section class="rounded-lg border border-slate-200 bg-white p-4" data-materials data-material-content="${esc(targetId)}">${head}${select}
+    <div class="mb-3 flex items-start justify-between gap-2">
+      <div class="min-w-0">
+        <p class="break-all text-sm font-medium" data-material-file>${esc(asset.originalFileName)}</p>
+        <p class="text-xs text-slate-500" data-material-count-line>PDF ${pdfPages}ページ／素材 ${images.length}</p>
+        <p class="text-xs text-slate-400">登録 ${formatDateTime(asset.importedAt)}</p>
+      </div>
+      <div class="relative shrink-0" data-material-menu>
+        <button type="button" class="${btnSecondary} !px-2 !py-1" data-action="toggle-material-menu" aria-haspopup="menu" aria-expanded="${state.materialMenuOpen}" aria-label="PDFのメニュー">︙</button>${menu}
+      </div>
+    </div>
+    <button type="button" class="${btnSecondary} mb-3 w-full" data-action="assign-sequential" data-id="${esc(targetId)}" ${plan.count === 0 ? 'disabled' : ''}
+      title="${seqTitle}">PDFを順番に割り当て</button>
+    <ul class="space-y-2" data-material-list>${items}</ul>
+    <p class="mt-3 text-xs text-slate-500">素材を、このコンテンツのページカードへドラッグして割り当てます。</p>
+  </section>`;
 }
 
 export function renderCompose(state) {
   const cur = state.current;
+  // lg以上：高さを親（画面の高さ）に合わせ、3カラムがそれぞれ縦スクロールする。lg未満：縦に積んでページ全体でスクロール
   return `
-    <div class="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)_300px]">
-      <aside class="space-y-4">${renderContentList(cur, state.contentDraft)}</aside>
-      <section class="min-w-0">${renderPageCards(cur, state.selectedPageNo)}</section>
-      <aside class="space-y-4">${renderDetail(cur, state.selectedPageNo)}</aside>
+    <div class="grid gap-4 lg:h-full lg:grid-cols-[280px_minmax(0,1fr)_300px] lg:grid-rows-[minmax(0,1fr)]" data-compose-grid>
+      <aside class="relative min-w-0 space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-left" data-column="left">${renderContentList(cur, state.contentDraft)}</aside>
+      <section class="relative min-w-0 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-center" data-column="center">${renderCenter(state)}</section>
+      <aside class="relative min-w-0 space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1" data-scroll-key="compose-right" data-column="right">${renderMaterials(state)}</aside>
     </div>`;
 }

@@ -2,3 +2,23 @@ node_modules
 dist
 *.local
 .DS_Store
+
+# 環境変数（サンプルは追跡する）
+.env
+.env.*
+!.env.example
+
+# ログ
+*.log
+
+# 書き出した閲覧用データ
+*.pageflow
+
+# テスト出力
+coverage/
+playwright-report/
+test-results/
+
+# エディタ設定
+.vscode/
+.idea/

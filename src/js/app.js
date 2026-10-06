@@ -1,28 +1,63 @@
 import '../css/style.css';
 import * as store from './store.js';
 import { renderHome } from './ui/home.js';
-import { renderCreate, renderFixedPreview } from './ui/create.js';
+import { renderCreate, renderPresetPreview } from './ui/create.js';
 import { renderEditor } from './ui/editor.js';
 import { renderImportedViewer } from './ui/imported-viewer.js';
 import { renderModal, renderToast } from './ui/dialog.js';
 import { validateNewBooklet } from './schemas.js';
 import { checkRange, isPlaced } from './domain/placement.js';
+import { checkAssign } from './domain/assignment.js';
+import { fitZoom } from './domain/compose-view.js';
+import { captureViewState, restoreViewState } from './ui/view-state.js';
 
 const root = document.getElementById('app');
 
 // 新規冊子フォームの入力値（再描画しても入力が消えないよう保持）
-let createForm = { name: '', totalPages: '8', errors: {} };
+let createForm = { name: '', totalPages: '8', preset: true, errors: {} };
 
 // ---- 描画 ----
+// ドラッグ中に画面を作り直すと、ドラッグ元の要素が消えてドラッグが中断される（トーストの自動消去・保存完了の通知など）。
+// そのため、ドラッグ中の再描画は保留し、ドラッグが終わってから1回だけ行う。
+let draggingContentId = null; // コンテンツ（左カラム／配置済みページ）をドラッグ中
+let draggingImageId = null; // 右カラムのPDF素材をドラッグ中
+let draggingPageNo = null; // 中央ビューのページをドラッグ中（ドロップ先のページと入れ替える）
+let renderDeferred = false;
+const isDragging = () => !!(draggingContentId || draggingImageId || draggingPageNo);
+function flushRender() {
+  if (!renderDeferred) return;
+  renderDeferred = false;
+  render(store.getState());
+}
+
 function render(state) {
+  if (isDragging()) {
+    renderDeferred = true;
+    return;
+  }
   let body = '';
   if (state.route.name === 'home') body = renderHome(state);
   else if (state.route.name === 'new') body = renderCreate(createForm);
   else if (state.route.name === 'booklet' && state.current) body = renderEditor(state);
   else if (state.route.name === 'view' && state.imported) body = renderImportedViewer(state);
   else body = '<p class="p-8 text-center text-sm text-slate-500">読み込み中…</p>';
+  // 再描画をまたいで、スクロール位置・フォーカス・入力途中の文字を保つ
+  const viewKey = `${state.route.name}:${state.route.id ?? ''}:${state.tab}`;
+  const snap = captureViewState(root, lastViewKey === viewKey ? viewKey : null);
   root.innerHTML = body + renderModal(state) + renderToast(state);
+  restoreViewState(root, snap, viewKey);
+  lastViewKey = viewKey;
+  // 編集開始などで要求された入力欄にフォーカスして全選択する（一度だけ）
+  const focusId = store.takeFocusRequest();
+  if (focusId) {
+    const el = root.querySelector(`#${CSS.escape(focusId)}`);
+    if (el) {
+      el.focus();
+      if (typeof el.select === 'function') el.select();
+    }
+  }
 }
+let lastViewKey = null;
 store.subscribe(render);
 
 // ---- ルーティング（ハッシュ。アプリ内の画面遷移用で、冊子の共有URLではない） ----
@@ -60,7 +95,7 @@ async function route() {
       }
       store.setRoute(r);
     } else if (r.name === 'new') {
-      createForm = { name: '', totalPages: '8', errors: {} };
+      createForm = { name: '', totalPages: '8', preset: true, errors: {} };
       store.setRoute(r);
     } else {
       await store.refreshBooklets();
@@ -78,6 +113,20 @@ const go = (hash) => {
   if (location.hash === hash) route();
   else location.hash = hash;
 };
+
+// ［全体表示］：中央ビューの表示領域に、現在の表示モード（一覧／見開き）のページ全体が収まる倍率にする
+function zoomToFit() {
+  const st = store.getState();
+  const col = root.querySelector('[data-column="center"]');
+  if (!col || !st.current) return;
+  const bar = col.querySelector('[data-compose-toolbar]');
+  const style = getComputedStyle(col);
+  const width = col.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 4;
+  // 3カラム（lg以上）は中央カラムの高さ、縦積みのときは画面の高さを基準にする
+  const scrollable = matchMedia('(min-width: 1024px)').matches;
+  const height = (scrollable ? col.clientHeight : window.innerHeight) - (bar?.offsetHeight ?? 0) - 12;
+  store.setComposeZoom(fitZoom({ mode: st.composeView.mode, totalPages: st.current.booklet.totalPages, width, height }));
+}
 
 // ---- クリック操作 ----
 root.addEventListener('click', async (e) => {
@@ -101,6 +150,47 @@ root.addEventListener('click', async (e) => {
       case 'dismiss-import-error':
         store.dismissImportError();
         break;
+      case 'open-preset':
+        store.openPresetDialog();
+        break;
+      case 'confirm-preset':
+        await store.confirmPreset();
+        break;
+      case 'show-content-pdf':
+        store.setModal({ type: 'content-pdf-info', contentId: id });
+        break;
+      case 'edit-name':
+        store.startNameEdit();
+        break;
+      case 'cancel-name-edit':
+        store.cancelNameEdit();
+        break;
+      case 'open-resize': {
+        const total = store.getState().current.booklet.totalPages;
+        store.setModal({ type: 'resize-pages', stage: 'input', value: String(total), error: null });
+        break;
+      }
+      case 'resize-step': {
+        // 4ずつ増減する（4の倍数でない入力は、次／前の4の倍数へ）。8未満にはしない
+        const st = store.getState();
+        const base = Number.parseInt(st.modal?.value, 10);
+        const cur = Number.isFinite(base) ? base : st.current.booklet.totalPages;
+        const dir = Number(el.dataset.dir);
+        const next = dir > 0 ? Math.floor(cur / 4) * 4 + 4 : Math.ceil(cur / 4) * 4 - 4;
+        store.patchModal({ value: String(Math.max(8, next)), error: null });
+        break;
+      }
+      case 'confirm-resize': {
+        const m = store.getState().modal;
+        const r = await store.resizeBookletAction(String(m.newTotalPages));
+        if (!r.ok) {
+          store.patchModal({ stage: 'input', value: String(m.newTotalPages), error: r.reason });
+          break;
+        }
+        store.setModal(null);
+        store.showToast(`総ページ数を${m.newTotalPages}Pに変更しました。`, 'success');
+        break;
+      }
       case 'open-viewer':
         go(`#/booklet/${encodeURIComponent(id)}/viewer`);
         break;
@@ -184,6 +274,31 @@ root.addEventListener('click', async (e) => {
         if (!r.ok) store.showToast(r.reason, 'error');
         break;
       }
+      case 'compose-mode':
+        store.setComposeMode(el.dataset.mode);
+        break;
+      case 'zoom-in':
+        store.stepComposeZoom(1);
+        break;
+      case 'zoom-out':
+        store.stepComposeZoom(-1);
+        break;
+      case 'zoom-fit':
+        zoomToFit();
+        break;
+      case 'toggle-material-menu':
+        store.toggleMaterialMenu();
+        break;
+      case 'assign-sequential': {
+        const r = await store.assignSequentialAction(id);
+        if (!r.ok) store.showToast(r.reason, 'error');
+        break;
+      }
+      case 'unassign-page': {
+        const r = await store.unassignPageAction(Number(no));
+        if (!r.ok) store.showToast(r.reason, 'error');
+        break;
+      }
     }
   } catch (err) {
     console.error(err);
@@ -202,9 +317,10 @@ root.addEventListener('submit', async (e) => {
       case 'create': {
         const name = String(data.get('name') ?? '');
         const totalPages = String(data.get('totalPages') ?? '');
-        const result = await store.createBookletAction(name, totalPages);
+        const preset = data.get('preset') === 'on';
+        const result = await store.createBookletAction(name, totalPages, preset);
         if (!result.ok) {
-          createForm = { name, totalPages, errors: result.errors };
+          createForm = { name, totalPages, preset, errors: result.errors };
           render(store.getState());
           break;
         }
@@ -232,15 +348,28 @@ root.addEventListener('submit', async (e) => {
         else store.setModal(null);
         break;
       }
-      case 'rename': {
-        const r = await store.renameBookletAction(String(data.get('name') ?? ''));
-        if (!r.ok) store.showToast(r.reason, 'error');
+      case 'rename-booklet':
+        await store.commitNameEdit(String(data.get('name') ?? ''));
         break;
-      }
-      case 'resize': {
-        const r = await store.resizeBookletAction(String(data.get('totalPages') ?? ''));
-        if (!r.ok) store.showToast(r.reason, 'error');
-        else store.showToast('総ページ数を変更しました。', 'success');
+      case 'resize-pages': {
+        // 見積もり→（配置済みのページが削除される場合のみ）確認→変更
+        const raw = String(data.get('totalPages') ?? '');
+        const plan = store.planResizeAction(raw);
+        if (!plan.ok) {
+          store.patchModal({ value: raw, error: plan.reason });
+          break;
+        }
+        if (plan.needsConfirm) {
+          store.patchModal({ stage: 'confirm', plan, newTotalPages: plan.newTotalPages, error: null });
+          break;
+        }
+        const r = await store.resizeBookletAction(raw);
+        if (!r.ok) {
+          store.patchModal({ value: raw, error: r.reason });
+          break;
+        }
+        store.setModal(null);
+        store.showToast(`総ページ数を${plan.newTotalPages}Pに変更しました。`, 'success');
         break;
       }
     }
@@ -288,11 +417,8 @@ window.addEventListener('pointercancel', () => {
   swipe = null;
 });
 
-// スマートフォン幅（〜639px）は1ページ表示、それ以上は見開き表示
-const compactQuery = window.matchMedia('(max-width: 639px)');
-const syncViewerMode = () => store.setViewerMode(compactQuery.matches ? 'single' : 'spread');
-compactQuery.addEventListener('change', syncViewerMode);
-syncViewerMode();
+// ビューアは画面幅によらず見開き構成（P1単独｜P2-P3｜…）。スマートフォンは縮小して画面幅に収める
+store.setViewerMode('spread');
 
 // ---- ビューア用データ（.pageflow）の選択：標準の <input type="file"> と File API のみを使用 ----
 root.addEventListener('change', async (e) => {
@@ -305,6 +431,23 @@ root.addEventListener('change', async (e) => {
   if (ok) location.hash = '#/view'; // 編集画面を経由せず、ビューアを直接開く
 });
 
+// ---- 右カラム（PDF素材）の対象コンテンツの切り替え ----
+root.addEventListener('change', (e) => {
+  const sel = e.target.closest('select[data-material-select]');
+  if (sel) store.setMaterialContent(sel.value);
+});
+
+// ［︙］メニューは、メニューの外をクリックしたら閉じる
+document.addEventListener('click', (e) => {
+  if (store.getState().materialMenuOpen && !e.target.closest('[data-material-menu]')) store.toggleMaterialMenu(false);
+});
+
+// ---- 標準構成ポップアップのチェックボックス ----
+root.addEventListener('change', (e) => {
+  const box = e.target.closest('input[data-preset-key]');
+  if (box) store.togglePresetKey(box.dataset.presetKey, box.checked);
+});
+
 // ---- PDFファイル選択：解析モーダルを開く（PDFはブラウザ内で処理し、外部へ送信しない）----
 root.addEventListener('change', async (e) => {
   const input = e.target.closest('input[data-pdf-input]');
@@ -314,6 +457,7 @@ root.addEventListener('change', async (e) => {
   input.value = ''; // 同じファイルを再選択できるようにする
   if (!file) return;
   try {
+    store.toggleMaterialMenu(false);
     await store.startPdfImport(contentId, file);
   } catch (err) {
     console.error(err);
@@ -323,7 +467,6 @@ root.addEventListener('change', async (e) => {
 
 // ---- ドラッグ＆ドロップ（HTML Drag and Drop API）----
 // コンテンツ一覧／配置済みページカードをドラッグし、ページカードへドロップして配置・移動する
-let draggingContentId = null;
 let hoverCard = null;
 
 function clearHover() {
@@ -332,6 +475,23 @@ function clearHover() {
 }
 
 root.addEventListener('dragstart', (e) => {
+  const mat = e.target.closest('[data-drag-image]');
+  if (mat) {
+    draggingImageId = mat.dataset.dragImage;
+    draggingContentId = null;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', draggingImageId);
+    return;
+  }
+  const pg = e.target.closest('[data-drag-page]');
+  if (pg) {
+    draggingPageNo = Number(pg.dataset.dragPage);
+    draggingContentId = null;
+    draggingImageId = null;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', `page:${draggingPageNo}`);
+    return;
+  }
   const el = e.target.closest('[data-drag-content]');
   if (!el) return;
   draggingContentId = el.dataset.dragContent;
@@ -341,15 +501,28 @@ root.addEventListener('dragstart', (e) => {
 
 root.addEventListener('dragover', (e) => {
   const card = e.target.closest('[data-drop-page]');
-  if (!card || !draggingContentId) return;
+  if (!card || (!draggingContentId && !draggingImageId && !draggingPageNo)) return;
   e.preventDefault(); // ドロップを許可（可否の判定はドロップ時に行う）
   if (card !== hoverCard) {
     clearHover();
     hoverCard = card;
-    // 配置できるかどうかを枠色で事前に示す（緑=可、赤=不可）
+    // 配置・割り当てできるかどうかを枠色で事前に示す（緑=可、赤=不可）
     const st = store.getState().current;
-    const content = st.contents.find((c) => c.id === draggingContentId);
-    const ok = content && checkRange(st, content, Number(card.dataset.dropPage)).ok;
+    let ok;
+    if (draggingPageNo) {
+      // 入れ替えできるか（自分自身の上は何も起きない）
+      const to = Number(card.dataset.dropPage);
+      if (to === draggingPageNo) {
+        hoverCard = card;
+        return;
+      }
+      ok = store.canSwapPages(draggingPageNo, to);
+    } else if (draggingImageId) {
+      ok = checkAssign(st, draggingImageId, Number(card.dataset.dropPage)).ok;
+    } else {
+      const content = st.contents.find((c) => c.id === draggingContentId);
+      ok = content && checkRange(st, content, Number(card.dataset.dropPage)).ok;
+    }
     card.classList.add('ring-2', ok ? 'ring-emerald-500' : 'ring-red-500');
   }
 });
@@ -360,23 +533,51 @@ root.addEventListener('dragleave', (e) => {
 
 root.addEventListener('dragend', () => {
   draggingContentId = null;
+  draggingImageId = null;
+  draggingPageNo = null;
   clearHover();
+  flushRender();
 });
 
 root.addEventListener('drop', async (e) => {
   const card = e.target.closest('[data-drop-page]');
-  if (!card || !draggingContentId) return;
+  if (!card || (!draggingContentId && !draggingImageId && !draggingPageNo)) return;
   e.preventDefault();
   const contentId = draggingContentId;
+  const imageId = draggingImageId;
+  const fromPage = draggingPageNo;
   draggingContentId = null;
+  draggingImageId = null;
+  draggingPageNo = null;
   clearHover();
+  flushRender();
   try {
+    if (fromPage) {
+      // ページ同士の入れ替え。拒否時は何も変更せず（別の空きページへも動かさず）理由を警告する
+      const r = await store.swapPagesAction(fromPage, Number(card.dataset.dropPage));
+      if (!r.ok) store.showToast(r.reason, 'error');
+      return;
+    }
+    if (imageId) {
+      // PDF素材の割り当て。拒否時は何も変更せず、理由を警告する
+      const r = await store.assignImageAction(imageId, Number(card.dataset.dropPage));
+      if (!r.ok) store.showToast(r.reason, 'error');
+      return;
+    }
     const r = await store.placeContentAction(contentId, Number(card.dataset.dropPage));
     // 拒否時は何も変更せず（元の配置を維持して）警告を出す
     if (!r.ok) store.showToast(r.reason, 'error');
   } catch (err) {
     console.error(err);
     store.showToast('操作に失敗しました。', 'error');
+  }
+});
+
+// 冊子名のインライン編集：Escで取り消し（Enterはフォーム送信で確定）
+root.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && e.target.id === 'h-name') {
+    e.preventDefault();
+    store.cancelNameEdit();
   }
 });
 
@@ -387,6 +588,12 @@ root.addEventListener('keydown', (e) => {
   if (!card || card !== e.target) return;
   e.preventDefault();
   store.selectPage(Number(card.dataset.no));
+});
+
+// ---- 冊子名の編集中・総ページ数ポップアップの入力中：値を状態へ控える（再描画はしない） ----
+root.addEventListener('input', (e) => {
+  if (e.target.id === 'h-name') store.setNameDraft(e.target.value);
+  else if (e.target.id === 'r-total') store.setModalField('value', e.target.value);
 });
 
 // ---- コンテンツ追加フォームの入力中：値を保持（再描画で消えないように） ----
@@ -403,15 +610,18 @@ root.addEventListener('input', (e) => {
   }
 });
 
-// ---- 新規冊子フォームの入力中：エラー表示と固定ページ構成プレビューを更新 ----
+// ---- 新規冊子フォームの入力中：エラー表示と標準構成のプレビューを更新 ----
 root.addEventListener('input', (e) => {
   const form = e.target.closest('form[data-form="create"]');
   if (!form) return;
   const data = new FormData(form);
   const name = String(data.get('name') ?? '');
   const totalPages = String(data.get('totalPages') ?? '');
+  const preset = data.get('preset') === 'on';
+  if (e.target.name === 'totalPages' || e.target.name === 'preset') {
+    form.querySelector('[data-preset-preview]').innerHTML = renderPresetPreview(totalPages, preset);
+  }
   if (e.target.name === 'totalPages') {
-    form.querySelector('[data-fixed-preview]').innerHTML = renderFixedPreview(totalPages);
     const res = validateNewBooklet('x', totalPages);
     const msg = res.ok ? '' : (res.errors.totalPages ?? '');
     form.querySelector('[data-error-for="totalPages"]').innerHTML = msg
@@ -420,7 +630,7 @@ root.addEventListener('input', (e) => {
     const p = form.querySelector('[data-error-for="totalPages"] p');
     if (p) p.textContent = msg;
   }
-  createForm = { ...createForm, name, totalPages };
+  createForm = { ...createForm, name, totalPages, preset };
 });
 
 route();

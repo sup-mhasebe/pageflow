@@ -1,6 +1,7 @@
 import { validateContentInput } from '../schemas.js';
 import { checkRange, isPlaced, startPageOf, unplaceContent } from './placement.js';
-import { assetOfContent, hasPdfRef, relinkPages, PDF_IN_USE_MESSAGE } from './pdf.js';
+import { assetOfContent } from './pdf.js';
+import { nextColorIndex } from './content-color.js';
 
 // ユーザーコンテンツのID。IndexedDB はキー順で返すため、作成順に並ぶよう時刻プレフィックスを付ける
 // 同一ミリ秒に複数作成しても順序が逆転しないよう、前回値より必ず大きくする
@@ -10,11 +11,23 @@ export function newContentId(now = Date.now()) {
   return `c_${lastStamp.toString(36).padStart(9, '0')}_${crypto.randomUUID()}`;
 }
 
-// 表示順：固定コンテンツ（表紙→裏表紙）の後にユーザーコンテンツを作成順で並べる
-export const FIXED_ORDER = ['表紙', '表紙裏', '目次', '裏表紙裏', '裏表紙'];
-export function sortContents(contents) {
-  const rank = (c) => (c.isFixed ? FIXED_ORDER.indexOf(c.name) : FIXED_ORDER.length);
-  return [...contents].sort((a, b) => rank(a) - rank(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+// 表示順：配置済みのコンテンツは開始ページ順、未配置のコンテンツはその後ろに作成順（IDの昇順）
+export function sortContents(contents, pages = []) {
+  const start = new Map();
+  for (const p of pages) {
+    if (!p.contentId) continue;
+    const cur = start.get(p.contentId);
+    if (cur === undefined || p.physicalPageNumber < cur) start.set(p.contentId, p.physicalPageNumber);
+  }
+  const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  return [...contents].sort((a, b) => {
+    const sa = start.get(a.id);
+    const sb = start.get(b.id);
+    if (sa !== undefined && sb !== undefined) return sa - sb || byId(a, b);
+    if (sa !== undefined) return -1;
+    if (sb !== undefined) return 1;
+    return byId(a, b);
+  });
 }
 
 export function addContent(state, rawName, rawRequiredPages) {
@@ -26,6 +39,7 @@ export function addContent(state, rawName, rawRequiredPages) {
     name: v.data.name,
     requiredPages: v.data.requiredPages,
     isFixed: false,
+    colorIndex: nextColorIndex(state.contents),
   };
   return { ok: true, content };
 }
@@ -35,7 +49,6 @@ export function addContent(state, rawName, rawRequiredPages) {
 export function updateContent(state, contentId, rawName, rawRequiredPages) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, errors: { name: 'コンテンツが見つかりません。' } };
-  if (content.isFixed) return { ok: false, errors: { name: '固定ページは編集できません。' } };
   const v = validateContentInput(rawName, rawRequiredPages);
   if (!v.ok) return { ok: false, errors: v.errors };
 
@@ -45,26 +58,31 @@ export function updateContent(state, contentId, rawName, rawRequiredPages) {
     const start = startPageOf(pages, contentId);
     const end = start + requiredPages - 1;
     if (requiredPages < content.requiredPages) {
-      // 解放されるページにPDF／生成画像がある場合は拒否する（PDFを暗黙的に削除・解除しない）
-      const freed = pages.filter((p) => p.contentId === contentId && p.physicalPageNumber > end);
-      if (freed.some(hasPdfRef)) {
-        return { ok: false, errors: { requiredPages: PDF_IN_USE_MESSAGE.replace('ページ数を変更できません', 'ページ数を減らせません') } };
-      }
-      // 減少：開始ページと先頭側の配置は維持し、不要になった末尾側のページだけ解除する
+      // 減少：開始ページと先頭側の配置は維持し、不要になった末尾側のページを解放する。
+      // 解放されるページの割り当ても解除する（事前の解除は求めない）。素材（RenderImage）・PdfAsset は削除せず、未割り当て素材として残る
       pages = pages.map((p) =>
         p.contentId === contentId && p.physicalPageNumber > end
           ? { ...p, contentId: null, contentPageIndex: null, pdfAssetId: null, renderImageId: null }
           : p,
       );
+      // ページの入れ替え（swap）で順序が変わっていても、残るページの順序（ordinal）は保ったまま 0..n-1 に詰め直す
+      const rank = new Map(
+        pages
+          .filter((p) => p.contentId === contentId)
+          .sort((x, y) => x.contentPageIndex - y.contentPageIndex)
+          .map((p, i) => [p.id, i]),
+      );
+      pages = pages.map((p) => (rank.has(p.id) ? { ...p, contentPageIndex: rank.get(p.id) } : p));
     } else {
       const check = checkRange(state, content, start, requiredPages);
       if (!check.ok) return { ok: false, errors: { requiredPages: `ページ数を増やせません。${check.reason}` } };
+      // 既存のページの順序（ordinal）・割り当ては変えず、新しく加わるページに続きの番号を付ける
+      let nextIndex = content.requiredPages;
       pages = pages.map((p) =>
-        p.physicalPageNumber >= start && p.physicalPageNumber <= end
-          ? { ...p, contentId, contentPageIndex: p.physicalPageNumber - start }
+        p.physicalPageNumber >= start && p.physicalPageNumber <= end && p.contentId !== contentId
+          ? { ...p, contentId, contentPageIndex: nextIndex++ }
           : p,
       );
-      pages = relinkPages({ ...state, pages });
     }
   }
   return { ok: true, content: { ...content, name, requiredPages }, pages };
@@ -77,7 +95,6 @@ export function updateContent(state, contentId, rawName, rawRequiredPages) {
 export function deleteContent(state, contentId, mode) {
   const content = state.contents.find((c) => c.id === contentId);
   if (!content) return { ok: false, reason: 'コンテンツが見つかりません。' };
-  if (content.isFixed) return { ok: false, reason: '固定ページは削除できません。' };
   const existing = assetOfContent(state, contentId);
   if (existing && mode !== 'trash' && mode !== 'delete') {
     return { ok: false, reason: 'PDFの扱い（ゴミ箱へ移す／完全削除）を選択してください。' };
@@ -102,10 +119,9 @@ export function deleteContent(state, contentId, mode) {
   };
 }
 
-// 容量チェック：登録コンテンツの合計ページ数が、固定ページ以外のページ数を超えていないか
+// 容量チェック：登録コンテンツの必要ページ数の合計が、総ページ数を超えていないか
 export function capacity(state) {
-  const fixed = state.contents.filter((c) => c.isFixed).length;
-  const available = state.booklet.totalPages - fixed;
-  const registered = state.contents.filter((c) => !c.isFixed).reduce((s, c) => s + c.requiredPages, 0);
+  const available = state.booklet.totalPages;
+  const registered = state.contents.reduce((s, c) => s + c.requiredPages, 0);
   return { available, registered, over: registered > available };
 }
