@@ -4,7 +4,7 @@
 
 実際のデザイン調整や印刷データの制作は Canva などで行い、PageFlow は「冊子の設計とシミュレーション」を担当します。
 
-- 公開URL：（Cloudflare Pages で公開後に記入）
+- 公開URL：https://pageflow-dyu.pages.dev （Basic認証で保護されています）
 - 社内AI研修「09 宿題」Level 2 の提出物です
 
 ## 主な機能
@@ -165,6 +165,16 @@ pageflow/
 | ビルドコマンド | `pnpm build` |
 | ビルド出力ディレクトリ | `dist` |
 | 環境変数 | `NODE_VERSION`（例：`22`） |
+
+### アクセス制限（Basic認証）
+
+公開URLはBasic認証で保護されています。
+
+- `functions/_middleware.js`（Cloudflare Pages Functions）がサイト全体にBasic認証をかけます
+- 認証情報は環境変数 `BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD` で、Cloudflare Pages の Secret として管理します
+- Secret が未設定の場合は、認証なしで公開されないよう 503 を返します（fail-closed）
+- `/robots.txt` のみ認証の対象外です（`Disallow: /` で検索エンジンへの登録を拒否）
+- 認証情報の実値は、リポジトリに保存しません
 
 ## AIをどう使ったか
 

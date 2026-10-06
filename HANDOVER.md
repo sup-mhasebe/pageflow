@@ -4,10 +4,11 @@
 
 ## 現在の状態
 
-- ブランチ: `feature/structure-v2`
-- 段階6Aまで push 済み。スマートフォン見開き対応（CSS＋app.js＋本書更新）を別コミットで追加し push する
-- 段階6Aの判定: PASS（自動テスト）。**PageFlow v0.1 人間受入テスト: PASS（iPhone実機、下記）**。次工程は main マージ・Cloudflare Pages デプロイの指示待ち
-- main の基準: `3f9a455`（`origin/main` も同じ。mainは変更しない）
+- ブランチ: `main`（`feature/structure-v2` は main にマージ済み）
+- Production: Cloudflare Pages（プロジェクト `pageflow`）、コミット `fc54aeb`。デプロイ完了
+- 公開URL: https://pageflow-dyu.pages.dev（Basic認証で保護）
+- 段階6Aの判定: PASS（自動テスト）。**PageFlow v0.1 人間受入テスト: PASS（iPhone実機、下記）**
+- 公開環境の受入確認: 完了（PC・iPhone実機。下記「公開環境の確認結果」参照）
 - 再開時は先に `git status` / `git log --oneline -3` で状態を確認する
 
 ## 完了済み工程
@@ -71,7 +72,6 @@
 
 ## 未実装の工程
 
-- **人間による実運用受入テスト**（段階6Aの次。mainへのマージ判断はこの後）
 - **段階6B: ドキュメント整理**（README／利用マニュアル／要件・基本設計書。6Aでは未着手）
 
 ## テスト・確認
@@ -109,11 +109,18 @@
 - 判定: **PageFlow v0.1 人間受入テスト PASS**
 - 残存リスク「実機のスワイプ確認」は解消。大容量PDF・多ページの実運用規模は引き続き運用で確認
 
+## 公開環境の確認結果（Cloudflare Pages）
+
+- Production: ブランチ `main`、コミット `fc54aeb`（Dashboardで目視確認）
+- Basic認証: `functions/_middleware.js`。`BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD` を Production の Secret に登録済み。登録後に再デプロイ済み
+  - Secret未設定時は 503（fail-closed）。`/robots.txt` のみ認証対象外（`User-agent: *` / `Disallow: /`）
+- 本番確認: 未認証で401とBasic認証ダイアログ、正しい認証情報でPageFlow正常表示、`/robots.txt` は認証なしで表示。PC（シークレットウィンドウ）・iPhone実機とも問題なし
+- 提出時もBasic認証は外さない。評価者への認証情報は、公開リポジトリとは別経路で共有する（実値はREADME・HANDOVER・Git履歴に残さない）
+
 ## Git運用ルール
 
-- 作業ブランチは `feature/structure-v2`。工程ごとにコミットし、pushはユーザーの指示があってから
-- push待ち: なし（スマホ見開き対応コミットを push 後）
-- main へのマージ、force push、Cloudflare Pages への本番デプロイは、ユーザーの明示指示なしに行わない
+- 作業は `main`。pushはユーザーの指示があってから
+- force push、Cloudflare Pages への本番デプロイは、ユーザーの明示指示なしに行わない
 - stash・WIPコミット・別ブランチでの退避はしない（復帰地点は push 済みコミット）
 
 ## 機密情報
